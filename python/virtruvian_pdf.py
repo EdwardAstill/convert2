@@ -142,8 +142,7 @@ def main():
 
         json.dump(result, sys.stdout, indent=2)
     except Exception as e:
-        json.dump({"error": str(e)}, sys.stdout)
-        sys.exit(1)
+        json.dump({"error": str(e)}, sys.stdout, indent=2)
 
 
 if __name__ == "__main__":
