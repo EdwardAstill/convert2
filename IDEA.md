@@ -1,0 +1,1 @@
+My idea is a bot that takes a pdf of a study or something and summarises it and takes out thim import aimages by screenshotting it and creates a markdown summry where it uses markdown links to show the images
