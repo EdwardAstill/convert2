@@ -1,0 +1,8 @@
+{
+  "name": "virtruvian",
+  "version": "0.1.0",
+  "description": "Summarize academic research PDFs into markdown with key images. Invoke with /summarize-pdf.",
+  "author": {
+    "name": "eastill"
+  }
+}
