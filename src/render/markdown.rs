@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 use crate::document::types::{Block, BlockKind, Document, ExtractedImage, Page, Section};
 use crate::error::VtvResult;
@@ -194,7 +196,7 @@ fn render_table(blocks: &[&Block]) -> String {
     let mut result = String::new();
     let mut first_row = true;
 
-    for (_, row_cells) in &grid {
+    for row_cells in grid.values() {
         result.push('|');
         for col in 0..col_count {
             let cell = row_cells.get(&col).map(String::as_str).unwrap_or("");
@@ -281,7 +283,7 @@ fn parse_heading_line(line: &str) -> Option<(u8, String)> {
     }
     let trimmed = line.trim_start_matches('#');
     let level = (line.len() - trimmed.len()) as u8;
-    if level >= 1 && level <= 6 {
+    if (1..=6).contains(&level) {
         let title = trimmed.trim().to_string();
         if !title.is_empty() {
             return Some((level, title));

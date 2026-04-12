@@ -135,11 +135,18 @@ fn process_one(
             formats::raw::RawFormat::write(&rendered, &doc, &output_dir, &stem)
                 .with_context(|| format!("Failed to write output to {}", output_dir.display()))?;
         }
-        Format::Rag | Format::Karpathy | Format::Kg => {
-            // Stub — not yet implemented
-            eprintln!("Format {:?} not yet implemented, falling back to raw", cli.format);
-            formats::raw::RawFormat::write(&rendered, &doc, &output_dir, &stem)
-                .with_context(|| format!("Failed to write output to {}", output_dir.display()))?;
+        Format::Rag => {
+            formats::rag::RagFormat::new(cli.chunk_size)
+                .write(&rendered, &doc, &output_dir, &stem)
+                .with_context(|| format!("Failed to write RAG output to {}", output_dir.display()))?;
+        }
+        Format::Karpathy => {
+            formats::karpathy::KarpathyFormat::write(&rendered, &doc, &output_dir, &stem)
+                .with_context(|| format!("Failed to write Karpathy output to {}", output_dir.display()))?;
+        }
+        Format::Kg => {
+            formats::kg::KgFormat::write(&rendered, &doc, &output_dir, &stem)
+                .with_context(|| format!("Failed to write KG output to {}", output_dir.display()))?;
         }
     }
 

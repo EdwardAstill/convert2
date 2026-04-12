@@ -67,6 +67,7 @@ impl Classifier {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_config(config: ClassifierConfig) -> Self {
         Self { config }
     }

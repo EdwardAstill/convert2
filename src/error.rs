@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum VtvError {
     #[error("Failed to open PDF '{path}': {message}")]
     PdfOpen { path: PathBuf, message: String },
