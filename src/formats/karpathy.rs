@@ -111,43 +111,68 @@ fn inject_wikilinks(content: &str, title_set: &HashSet<String>, current_title: &
 
 /// Replace all case-insensitive occurrences of `title` in `text` with `[[Title]]`.
 /// Avoids replacing text already inside `[[...]]` or inside inline code.
+/// Preserves the original matched casing via a display alias: `[[Title|title]]`.
 fn replace_with_wikilink(text: &str, title: &str) -> String {
     let title_lower = title.to_lowercase();
-    let mut result = String::with_capacity(text.len());
-    let chars: Vec<char> = text.chars().collect();
     let title_chars: Vec<char> = title_lower.chars().collect();
-    let n = chars.len();
     let m = title_chars.len();
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+
+    let mut result = String::with_capacity(text.len() + 32);
     let mut i = 0;
-    let mut in_wikilink = false;
-    let mut in_code = false;
 
     while i < n {
-        // Track wikilink context
+        // Skip content inside [[...]] — don't double-link
         if i + 1 < n && chars[i] == '[' && chars[i + 1] == '[' {
-            in_wikilink = true;
-        }
-        if i + 1 < n && chars[i] == ']' && chars[i + 1] == ']' {
-            in_wikilink = false;
+            // Copy everything until matching ]]
             result.push(chars[i]);
             result.push(chars[i + 1]);
             i += 2;
+            while i < n {
+                if i + 1 < n && chars[i] == ']' && chars[i + 1] == ']' {
+                    result.push(chars[i]);
+                    result.push(chars[i + 1]);
+                    i += 2;
+                    break;
+                }
+                result.push(chars[i]);
+                i += 1;
+            }
             continue;
         }
-        // Track inline code
+
+        // Skip content inside backtick code spans
         if chars[i] == '`' {
-            in_code = !in_code;
+            result.push(chars[i]);
+            i += 1;
+            while i < n && chars[i] != '`' {
+                result.push(chars[i]);
+                i += 1;
+            }
+            if i < n {
+                result.push(chars[i]); // closing backtick
+                i += 1;
+            }
+            continue;
         }
 
-        if !in_wikilink && !in_code && i + m <= n {
-            // Check for case-insensitive match
-            let window: String = chars[i..i + m].iter().collect::<String>().to_lowercase();
-            if window == title_lower {
-                // Check word boundaries: char before and after should not be alphanumeric
+        // Try to match title at position i
+        if i + m <= n {
+            let window_lower: String = chars[i..i + m].iter()
+                .collect::<String>()
+                .to_lowercase();
+            if window_lower == title_lower {
                 let before_ok = i == 0 || !chars[i - 1].is_alphanumeric();
                 let after_ok = i + m >= n || !chars[i + m].is_alphanumeric();
                 if before_ok && after_ok {
-                    result.push_str(&format!("[[{}]]", title));
+                    let matched_text: String = chars[i..i + m].iter().collect();
+                    let link = if matched_text == title {
+                        format!("[[{}]]", title)
+                    } else {
+                        format!("[[{}|{}]]", title, matched_text)
+                    };
+                    result.push_str(&link);
                     i += m;
                     continue;
                 }

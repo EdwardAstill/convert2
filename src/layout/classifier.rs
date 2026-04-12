@@ -79,9 +79,8 @@ impl Classifier {
 
         raw_blocks
             .into_iter()
-            .enumerate()
-            .map(|(i, rb)| {
-                let kind = if let Some(tc) = table_cells.get(&i) {
+            .map(|rb| {
+                let kind = if let Some(tc) = table_cells.get(&rb.block_id) {
                     tc.clone()
                 } else {
                     self.classify_block(&rb, page)
@@ -245,7 +244,7 @@ fn is_likely_heading_text(text: &str) -> bool {
 }
 
 /// Detect table cells by finding blocks arranged in a 2D grid.
-/// Returns a map from block index → BlockKind::TableCell { row, col }.
+/// Returns a map from block_id → BlockKind::TableCell { row, col }.
 fn detect_table_cells(blocks: &[RawTextBlock]) -> std::collections::HashMap<usize, BlockKind> {
     use std::collections::HashMap;
 
@@ -268,18 +267,51 @@ fn detect_table_cells(blocks: &[RawTextBlock]) -> std::collections::HashMap<usiz
         return result;
     }
 
-    // Assign each block to a (row, col) if it aligns to cluster centres
-    for (i, block) in blocks.iter().enumerate() {
+    // Guard: a real table rarely has more than 10 columns
+    if x_clusters.len() > 10 {
+        return result;
+    }
+
+    // Assign each block to a (row, col) if it aligns to cluster centres,
+    // keyed by block_id for stability against reordering.
+    for block in blocks.iter() {
         let col = nearest_cluster(block.bbox.x0, &x_clusters, 8.0);
         let row = nearest_cluster(block.bbox.y0, &y_clusters, 6.0);
         if let (Some(col), Some(row)) = (col, row) {
-            result.insert(i, BlockKind::TableCell { row, col });
+            result.insert(block.block_id, BlockKind::TableCell { row, col });
         }
     }
 
     // Only keep as table if at least 4 cells were assigned (2x2 minimum)
     if result.len() < 4 {
         result.clear();
+        return result;
+    }
+
+    // Guard 1: if more than 30% of all blocks are classified as table cells AND
+    // there are enough blocks to distinguish a table from two-column body text.
+    // Small tables (< 20 blocks total) are always considered valid.
+    if blocks.len() >= 20 && result.len() > blocks.len() * 3 / 10 {
+        result.clear();
+        return result;
+    }
+
+    // Guard 2: the y-range of assigned cells must be spatially compact.
+    // Estimate page height from the maximum y1 of all blocks on the page.
+    let assigned_blocks: Vec<&RawTextBlock> = blocks
+        .iter()
+        .filter(|b| result.contains_key(&b.block_id))
+        .collect();
+
+    if let (Some(min_y), Some(max_y)) = (
+        assigned_blocks.iter().map(|b| b.bbox.y0).reduce(f32::min),
+        assigned_blocks.iter().map(|b| b.bbox.y1).reduce(f32::max),
+    ) {
+        let page_height = blocks.iter().map(|b| b.bbox.y1).reduce(f32::max).unwrap_or(1.0);
+        let table_height_fraction = (max_y - min_y) / page_height;
+        if table_height_fraction > 0.4 {
+            result.clear();
+        }
     }
 
     result
@@ -346,13 +378,17 @@ mod tests {
     }
 
     fn make_block(x0: f32, y0: f32, x1: f32, y1: f32, text: &str, font_size: f32) -> RawTextBlock {
+        make_block_id(x0, y0, x1, y1, text, font_size, 0)
+    }
+
+    fn make_block_id(x0: f32, y0: f32, x1: f32, y1: f32, text: &str, font_size: f32, block_id: usize) -> RawTextBlock {
         RawTextBlock {
             bbox: Bbox::new(x0, y0, x1, y1),
             text: text.to_string(),
             font_size,
             font_name: "unknown".to_string(),
             page_num: 0,
-            block_id: 0,
+            block_id,
             reading_order: 0,
         }
     }
@@ -450,10 +486,10 @@ mod tests {
     #[test]
     fn table_cell_detection_2x2() {
         let blocks = vec![
-            make_block(50.0, 100.0, 150.0, 120.0, "A1", 10.0),
-            make_block(200.0, 100.0, 300.0, 120.0, "A2", 10.0),
-            make_block(50.0, 130.0, 150.0, 150.0, "B1", 10.0),
-            make_block(200.0, 130.0, 300.0, 150.0, "B2", 10.0),
+            make_block_id(50.0, 100.0, 150.0, 120.0, "A1", 10.0, 0),
+            make_block_id(200.0, 100.0, 300.0, 120.0, "A2", 10.0, 1),
+            make_block_id(50.0, 130.0, 150.0, 150.0, "B1", 10.0, 2),
+            make_block_id(200.0, 130.0, 300.0, 150.0, "B2", 10.0, 3),
         ];
         let cells = detect_table_cells(&blocks);
         assert_eq!(cells.len(), 4);

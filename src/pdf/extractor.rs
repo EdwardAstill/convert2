@@ -11,6 +11,7 @@ pub struct PdfExtractor;
 
 impl PdfExtractor {
     /// Extract all pages from a PDF file.
+    #[allow(dead_code)]
     pub fn extract_pages(path: &Path) -> VtvResult<Vec<RawPage>> {
         let path_str = path.to_string_lossy();
         let doc = Document::open(path_str.as_ref()).map_err(|e| VtvError::PdfOpen {
@@ -32,6 +33,7 @@ impl PdfExtractor {
     }
 
     /// Extract document metadata (title, author, subject, page count).
+    #[allow(dead_code)]
     pub fn extract_metadata(path: &Path) -> VtvResult<DocumentMetadata> {
         let path_str = path.to_string_lossy();
         let doc = Document::open(path_str.as_ref()).map_err(|e| VtvError::PdfOpen {
@@ -65,6 +67,35 @@ impl PdfExtractor {
             subject,
             page_count,
         })
+    }
+
+    /// Extract all pages and metadata from a PDF in a single file open.
+    pub fn extract(path: &Path) -> VtvResult<(Vec<RawPage>, DocumentMetadata)> {
+        let path_str = path.to_string_lossy();
+        let doc = Document::open(path_str.as_ref()).map_err(|e| VtvError::PdfOpen {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })?;
+
+        let page_count = doc.page_count().map_err(|e| VtvError::PdfExtraction {
+            page: 0,
+            message: e.to_string(),
+        })? as usize;
+
+        let mut pages = Vec::with_capacity(page_count);
+        for page_num in 0..page_count {
+            pages.push(Self::extract_page(&doc, page_num)?);
+        }
+
+        // Extract metadata from the already-open document
+        let metadata = DocumentMetadata {
+            title: doc.metadata(MetadataName::Title).ok().filter(|s| !s.is_empty()),
+            author: doc.metadata(MetadataName::Author).ok().filter(|s| !s.is_empty()),
+            subject: doc.metadata(MetadataName::Subject).ok().filter(|s| !s.is_empty()),
+            page_count,
+        };
+
+        Ok((pages, metadata))
     }
 
     // --- private helpers ---

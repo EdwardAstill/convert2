@@ -62,6 +62,9 @@ impl MarkdownRenderer {
         let mut md = String::new();
         let images: Vec<ExtractedImage> = Vec::new();
 
+        // Emit a page boundary marker (1-indexed, invisible when rendered)
+        md.push_str(&format!("<!-- page:{} -->\n", page.page_num + 1));
+
         // Sort blocks by reading_order
         let mut blocks: Vec<&Block> = page.blocks.iter().collect();
         blocks.sort_by_key(|b| b.reading_order);
@@ -226,9 +229,17 @@ fn split_into_sections(markdown: &str, doc: &Document) -> Vec<Section> {
     let mut current_level = 1u8;
     let mut current_content = String::new();
     let mut current_page_start = 1usize;
+    let mut current_page = 1usize;
     let mut found_heading = false;
 
     for line in markdown.lines() {
+        // Track page transitions via embedded markers
+        if let Some(page_num) = parse_page_marker(line) {
+            current_page = page_num;
+            // Don't add the marker to content
+            continue;
+        }
+
         if let Some((level, title)) = parse_heading_line(line) {
             // Flush previous section
             if found_heading || !current_content.trim().is_empty() {
@@ -237,14 +248,13 @@ fn split_into_sections(markdown: &str, doc: &Document) -> Vec<Section> {
                     level: current_level,
                     content: current_content.trim().to_string(),
                     page_start: current_page_start,
-                    page_end: current_page_start,
+                    page_end: current_page,
                 });
             }
             current_title = title;
             current_level = level;
             current_content = String::new();
-            // Approximate — we don't track per-line page numbers
-            current_page_start = 1;
+            current_page_start = current_page;
             found_heading = true;
         } else {
             current_content.push_str(line);
@@ -274,6 +284,18 @@ fn split_into_sections(markdown: &str, doc: &Document) -> Vec<Section> {
     }
 
     sections
+}
+
+/// Detect an embedded page boundary marker of the form `<!-- page:N -->`.
+/// Returns the 1-indexed page number, or `None` if the line is not a marker.
+fn parse_page_marker(line: &str) -> Option<usize> {
+    let trimmed = line.trim();
+    if trimmed.starts_with("<!-- page:") && trimmed.ends_with(" -->") {
+        let inner = &trimmed["<!-- page:".len()..trimmed.len() - " -->".len()];
+        inner.trim().parse::<usize>().ok()
+    } else {
+        None
+    }
 }
 
 /// Parse a markdown heading line. Returns `(level, title)` or `None`.

@@ -98,26 +98,58 @@ fn build_region(
         };
     }
 
-    // Try horizontal cut first (top-to-bottom takes priority in reading order)
-    if let Some(cut_y) = best_horizontal_cut(indices, blocks, config) {
-        let (top_idx, bottom_idx) = split_horizontal(indices, blocks, cut_y);
-        if !top_idx.is_empty() && !bottom_idx.is_empty() {
-            return XyCutNode::HorizontalCut {
-                top: Box::new(build_region(&top_idx, blocks, config, depth + 1)),
-                bottom: Box::new(build_region(&bottom_idx, blocks, config, depth + 1)),
-            };
-        }
-    }
+    let h_result = best_horizontal_cut(indices, blocks, config);
+    let v_result = best_vertical_cut(indices, blocks, config);
 
-    // Try vertical cut (columns)
-    if let Some(cut_x) = best_vertical_cut(indices, blocks, config) {
-        let (left_idx, right_idx) = split_vertical(indices, blocks, cut_x);
-        if !left_idx.is_empty() && !right_idx.is_empty() {
-            return XyCutNode::VerticalCut {
-                left: Box::new(build_region(&left_idx, blocks, config, depth + 1)),
-                right: Box::new(build_region(&right_idx, blocks, config, depth + 1)),
-            };
+    match (h_result, v_result) {
+        (Some((cut_y, h_gap)), Some((cut_x, v_gap))) => {
+            // Prefer vertical (column) cut when its gap is significantly larger — this
+            // correctly splits multi-column layouts before splitting on paragraph gaps.
+            if v_gap > h_gap * 1.2 {
+                let (left_idx, right_idx) = split_vertical(indices, blocks, cut_x);
+                if !left_idx.is_empty() && !right_idx.is_empty() {
+                    return XyCutNode::VerticalCut {
+                        left: Box::new(build_region(&left_idx, blocks, config, depth + 1)),
+                        right: Box::new(build_region(&right_idx, blocks, config, depth + 1)),
+                    };
+                }
+            }
+            // Default: horizontal first (natural top-to-bottom reading order)
+            let (top_idx, bottom_idx) = split_horizontal(indices, blocks, cut_y);
+            if !top_idx.is_empty() && !bottom_idx.is_empty() {
+                return XyCutNode::HorizontalCut {
+                    top: Box::new(build_region(&top_idx, blocks, config, depth + 1)),
+                    bottom: Box::new(build_region(&bottom_idx, blocks, config, depth + 1)),
+                };
+            }
+            // Horizontal split degenerate — fall back to vertical
+            let (left_idx, right_idx) = split_vertical(indices, blocks, cut_x);
+            if !left_idx.is_empty() && !right_idx.is_empty() {
+                return XyCutNode::VerticalCut {
+                    left: Box::new(build_region(&left_idx, blocks, config, depth + 1)),
+                    right: Box::new(build_region(&right_idx, blocks, config, depth + 1)),
+                };
+            }
         }
+        (Some((cut_y, _)), None) => {
+            let (top_idx, bottom_idx) = split_horizontal(indices, blocks, cut_y);
+            if !top_idx.is_empty() && !bottom_idx.is_empty() {
+                return XyCutNode::HorizontalCut {
+                    top: Box::new(build_region(&top_idx, blocks, config, depth + 1)),
+                    bottom: Box::new(build_region(&bottom_idx, blocks, config, depth + 1)),
+                };
+            }
+        }
+        (None, Some((cut_x, _))) => {
+            let (left_idx, right_idx) = split_vertical(indices, blocks, cut_x);
+            if !left_idx.is_empty() && !right_idx.is_empty() {
+                return XyCutNode::VerticalCut {
+                    left: Box::new(build_region(&left_idx, blocks, config, depth + 1)),
+                    right: Box::new(build_region(&right_idx, blocks, config, depth + 1)),
+                };
+            }
+        }
+        (None, None) => {}
     }
 
     // No cut possible — leaf
@@ -127,12 +159,12 @@ fn build_region(
 }
 
 /// Find the y-coordinate of the best horizontal cut (largest vertical gap between blocks).
-/// Returns `None` if no gap exceeds `min_horizontal_gap`.
+/// Returns `None` if no gap exceeds `min_horizontal_gap`, otherwise `Some((cut_y, gap_size))`.
 fn best_horizontal_cut(
     indices: &[usize],
     blocks: &[RawTextBlock],
     config: &XyCutConfig,
-) -> Option<f32> {
+) -> Option<(f32, f32)> {
     let mut sorted = indices.to_vec();
     sorted.sort_by(|&a, &b| {
         blocks[a]
@@ -143,30 +175,33 @@ fn best_horizontal_cut(
     });
 
     let mut best_gap = config.min_horizontal_gap;
-    let mut best_cut = None;
-    let mut max_y1_so_far = f32::NEG_INFINITY;
+    let mut best_cut: Option<(f32, f32)> = None;
+    // Initialise to the first block's y1 so the very first inter-block gap
+    // is measured correctly (not against NEG_INFINITY).
+    let mut max_y1 = f32::NEG_INFINITY;
 
     for &idx in &sorted {
         let bbox = &blocks[idx].bbox;
-        let gap = bbox.y0 - max_y1_so_far;
 
-        // Apply overlap tolerance: treat small overlaps as zero gap; skip large overlaps
-        let effective_gap = if gap >= -config.overlap_tolerance {
-            gap.max(0.0)
-        } else {
-            if bbox.y1 > max_y1_so_far {
-                max_y1_so_far = bbox.y1;
+        if max_y1 > f32::NEG_INFINITY {
+            // There is a previous block — measure the gap against the running maximum.
+            let gap = bbox.y0 - max_y1;
+
+            // Apply overlap tolerance: treat small overlaps as zero gap; skip large overlaps
+            if gap >= -config.overlap_tolerance {
+                let effective_gap = gap.max(0.0);
+                if effective_gap > best_gap {
+                    best_gap = effective_gap;
+                    // Use raw gap for midpoint so the cut is placed between the two blocks
+                    // even when gap is clamped to zero (slight overlap case)
+                    best_cut = Some((max_y1 + gap / 2.0, effective_gap));
+                }
             }
-            continue;
-        };
-
-        if effective_gap > best_gap {
-            best_gap = effective_gap;
-            best_cut = Some(max_y1_so_far + effective_gap / 2.0);
         }
 
-        if bbox.y1 > max_y1_so_far {
-            max_y1_so_far = bbox.y1;
+        // Always update max — even for overlapping blocks
+        if bbox.y1 > max_y1 {
+            max_y1 = bbox.y1;
         }
     }
 
@@ -174,12 +209,12 @@ fn best_horizontal_cut(
 }
 
 /// Find the x-coordinate of the best vertical cut (largest horizontal gap between blocks).
-/// Returns `None` if no gap exceeds `min_vertical_gap`.
+/// Returns `None` if no gap exceeds `min_vertical_gap`, otherwise `Some((cut_x, gap_size))`.
 fn best_vertical_cut(
     indices: &[usize],
     blocks: &[RawTextBlock],
     config: &XyCutConfig,
-) -> Option<f32> {
+) -> Option<(f32, f32)> {
     let mut sorted = indices.to_vec();
     sorted.sort_by(|&a, &b| {
         blocks[a]
@@ -190,29 +225,30 @@ fn best_vertical_cut(
     });
 
     let mut best_gap = config.min_vertical_gap;
-    let mut best_cut = None;
-    let mut max_x1_so_far = f32::NEG_INFINITY;
+    let mut best_cut: Option<(f32, f32)> = None;
+    let mut max_x1 = f32::NEG_INFINITY;
 
     for &idx in &sorted {
         let bbox = &blocks[idx].bbox;
-        let gap = bbox.x0 - max_x1_so_far;
 
-        let effective_gap = if gap >= -config.overlap_tolerance {
-            gap.max(0.0)
-        } else {
-            if bbox.x1 > max_x1_so_far {
-                max_x1_so_far = bbox.x1;
+        if max_x1 > f32::NEG_INFINITY {
+            // There is a previous block — measure the gap against the running maximum.
+            let gap = bbox.x0 - max_x1;
+
+            if gap >= -config.overlap_tolerance {
+                let effective_gap = gap.max(0.0);
+                if effective_gap > best_gap {
+                    best_gap = effective_gap;
+                    // Use raw gap for midpoint so the cut is placed between the two blocks
+                    // even when gap is clamped to zero (slight overlap case)
+                    best_cut = Some((max_x1 + gap / 2.0, effective_gap));
+                }
             }
-            continue;
-        };
-
-        if effective_gap > best_gap {
-            best_gap = effective_gap;
-            best_cut = Some(max_x1_so_far + effective_gap / 2.0);
         }
 
-        if bbox.x1 > max_x1_so_far {
-            max_x1_so_far = bbox.x1;
+        // Always update max — even for overlapping blocks
+        if bbox.x1 > max_x1 {
+            max_x1 = bbox.x1;
         }
     }
 

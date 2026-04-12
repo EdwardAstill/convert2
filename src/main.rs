@@ -9,7 +9,6 @@ mod render;
 
 use anyhow::Context;
 use clap::Parser;
-use rayon::prelude::*;
 
 use cli::{Cli, Format};
 use layout::{
@@ -37,7 +36,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let results: Vec<(std::path::PathBuf, anyhow::Result<()>)> = inputs
-        .par_iter()
+        .iter()
         .map(|pdf_path| {
             let result = process_one(pdf_path, &cli, &xycut_config);
             (pdf_path.clone(), result)
@@ -75,12 +74,9 @@ fn process_one(
         eprintln!("  processing: {}", pdf_path.display());
     }
 
-    // Extract raw pages
-    let raw_pages = PdfExtractor::extract_pages(pdf_path)
-        .with_context(|| format!("Failed to extract pages from {}", pdf_path.display()))?;
-
-    let metadata = PdfExtractor::extract_metadata(pdf_path)
-        .with_context(|| format!("Failed to extract metadata from {}", pdf_path.display()))?;
+    // Extract raw pages and metadata in a single file open
+    let (raw_pages, metadata) = PdfExtractor::extract(pdf_path)
+        .with_context(|| format!("Failed to extract {}", pdf_path.display()))?;
 
     // Build classifier from document-level font size stats
     let classifier = Classifier::new_for_document(&raw_pages);

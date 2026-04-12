@@ -193,9 +193,15 @@ fn chunk_text(text: &str, target_tokens: usize, overlap_tokens: usize) -> Vec<St
             chunks.push(current.trim().to_string());
 
             // Start next chunk with overlap from end of previous
-            let overlap_chars = overlap_tokens * 4;
+            let overlap_char_count = overlap_tokens * 4; // approximate chars
             let prev = chunks.last().unwrap();
-            let overlap_start = prev.len().saturating_sub(overlap_chars);
+            // Walk back `overlap_char_count` characters from the end to find a safe boundary
+            let overlap_start = prev
+                .char_indices()
+                .rev()
+                .nth(overlap_char_count.saturating_sub(1))
+                .map(|(i, _)| i)
+                .unwrap_or(0);
             let overlap_text = &prev[overlap_start..];
             current = overlap_text.to_string();
             current.push_str("\n\n");
@@ -216,7 +222,12 @@ fn chunk_text(text: &str, target_tokens: usize, overlap_tokens: usize) -> Vec<St
     chunks
 }
 
-/// Quote a string for YAML — wraps in double quotes and escapes internal quotes.
+/// Quote a string for YAML — wraps in double quotes and escapes backslashes, quotes, and newlines.
 fn yaml_quote(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\\\""))
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r");
+    format!("\"{}\"", escaped)
 }
