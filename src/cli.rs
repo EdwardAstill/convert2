@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "vtv",
-    about = "Convert PDFs to AI-friendly markdown",
+    name = "cnv",
+    about = "Convert files to AI-friendly markdown",
     version
 )]
 pub struct Cli {

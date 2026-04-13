@@ -1,8 +1,8 @@
-# vtv — Vitruvian PDF-to-Markdown CLI
+# cnv — convert2 PDF-to-Markdown CLI
 
 ## Project purpose
 
-`vtv` converts PDF files into AI-friendly markdown structures. It solves the problem of feeding PDF content into LLM pipelines by extracting text with layout analysis, classifying blocks by semantic role, and writing output in one of four formats optimized for different downstream uses (plain markdown, RAG chunking, Obsidian-style wikilinks, or a knowledge graph).
+`cnv` converts PDF files into AI-friendly markdown structures. It solves the problem of feeding PDF content into LLM pipelines by extracting text with layout analysis, classifying blocks by semantic role, and writing output in one of four formats optimized for different downstream uses (plain markdown, RAG chunking, Obsidian-style wikilinks, or a knowledge graph).
 
 ## Architecture overview
 
@@ -65,7 +65,7 @@ PDF file
 
 ```bash
 # Prerequisites: clang, libclang-dev (for mupdf bindgen)
-cargo build --release        # binary at target/release/vtv
+cargo build --release        # binary at target/release/cnv
 cargo test                   # 20 unit tests across xycut, classifier, renderer
 cargo clippy -- -D warnings  # must be clean before committing
 ```
@@ -73,19 +73,19 @@ cargo clippy -- -D warnings  # must be clean before committing
 ### Usage
 
 ```bash
-vtv paper.pdf                        # raw format, output next to input
-vtv paper.pdf -f rag --chunk-size 800
-vtv paper.pdf -f karpathy -o ./notes/
-vtv paper.pdf -f kg
-vtv "papers/*.pdf" -f rag -o ./out/  # glob input
-vtv ./papers/ -f raw                 # directory input
+cnv paper.pdf                        # raw format, output next to input
+cnv paper.pdf -f rag --chunk-size 800
+cnv paper.pdf -f karpathy -o ./notes/
+cnv paper.pdf -f kg
+cnv "papers/*.pdf" -f rag -o ./out/  # glob input
+cnv ./papers/ -f raw                 # directory input
 ```
 
 CLI flags: `--format` (`raw`|`rag`|`karpathy`|`kg`), `--output`, `--chunk-size`, `--min-h-gap`, `--min-v-gap`, `--no-images`, `--verbose`.
 
 ## Adding a new output format
 
-1. Create `src/formats/newformat.rs`. Implement a struct with a `write(rendered: &RenderedDocument, doc: &Document, output_dir: &Path, stem: &str) -> VtvResult<()>` method. Use `VtvError::Io` for all `fs::` errors.
+1. Create `src/formats/newformat.rs`. Implement a struct with a `write(rendered: &RenderedDocument, doc: &Document, output_dir: &Path, stem: &str) -> VtvResult<()>` method. Use `VtvError::Io` for all `fs::` errors. (`VtvError`/`VtvResult` are defined in `src/error.rs` — the internal type names were not changed from the original codebase.)
 
 2. Add `pub mod newformat;` to `src/formats/mod.rs`.
 

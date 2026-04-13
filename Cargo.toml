@@ -1,12 +1,12 @@
 [package]
-name = "vtv"
+name = "cnv"
 version = "0.1.0"
 edition = "2021"
-description = "Convert PDFs to AI-friendly markdown structures"
+description = "Convert files to AI-friendly markdown structures"
 license = "MIT"
 
 [[bin]]
-name = "vtv"
+name = "cnv"
 path = "src/main.rs"
 
 [dependencies]

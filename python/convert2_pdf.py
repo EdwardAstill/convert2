@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""PDF text and image extraction for Virtruvian.
+"""PDF text and image extraction for convert2.
 
 Usage:
-    virtruvian_pdf.py extract_text <pdf_path> [--pages 1,2,3]
-    virtruvian_pdf.py extract_images <pdf_path> <output_dir> [--pages 1,2,3]
-    virtruvian_pdf.py render_page <pdf_path> <output_path> --page <n> [--dpi 150]
+    convert2_pdf.py extract_text <pdf_path> [--pages 1,2,3]
+    convert2_pdf.py extract_images <pdf_path> <output_dir> [--pages 1,2,3]
+    convert2_pdf.py render_page <pdf_path> <output_path> --page <n> [--dpi 150]
 
 All commands output JSON to stdout.
 """
@@ -109,7 +109,7 @@ def parse_pages(pages_str: str | None) -> list[int] | None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Virtruvian PDF processor")
+    parser = argparse.ArgumentParser(description="convert2 PDF processor")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_text = subparsers.add_parser("extract_text")

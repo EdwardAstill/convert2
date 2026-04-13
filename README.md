@@ -1,6 +1,6 @@
-# vtv
+# cnv (convert2)
 
-`vtv` converts PDF documents into AI-friendly markdown structures. It is a single self-contained binary with no runtime dependencies on Java, Python, or a GPU. All processing happens locally. Given a PDF file (or a directory or glob of files), `vtv` extracts text with bounding boxes via MuPDF, reconstructs reading order using an XY-Cut++ algorithm, classifies blocks into headings, lists, tables, captions, and body text, then writes one of four output formats suited to different downstream uses: raw markdown, RAG-ready chunks, a Karpathy-style wiki folder, or a JSON knowledge graph.
+`cnv` converts PDF documents into AI-friendly markdown structures. It is a single self-contained binary with no runtime dependencies on Java, Python, or a GPU. All processing happens locally. Given a PDF file (or a directory or glob of files), `cnv` extracts text with bounding boxes via MuPDF, reconstructs reading order using an XY-Cut++ algorithm, classifies blocks into headings, lists, tables, captions, and body text, then writes one of four output formats suited to different downstream uses: raw markdown, RAG-ready chunks, a Karpathy-style wiki folder, or a JSON knowledge graph.
 
 ---
 
@@ -22,7 +22,7 @@
 
 ### Prerequisites
 
-`vtv` bundles MuPDF and compiles it from source during the first `cargo build`. This requires `clang` for the `bindgen`-generated bindings.
+`cnv` bundles MuPDF and compiles it from source during the first `cargo build`. This requires `clang` for the `bindgen`-generated bindings.
 
 | Platform | Command |
 | --- | --- |
@@ -34,7 +34,7 @@
 
 ```sh
 cargo build --release
-cp target/release/vtv ~/.local/bin/   # or anywhere on PATH
+cp target/release/cnv ~/.local/bin/   # or anywhere on PATH
 ```
 
 Or install directly with Cargo:
@@ -50,7 +50,7 @@ The first build is slow (roughly 5 minutes) because MuPDF is compiled from sourc
 ## Usage
 
 ```
-vtv <INPUT> [OPTIONS]
+cnv <INPUT> [OPTIONS]
 ```
 
 `INPUT` can be a single PDF path, a directory (all `.pdf` files inside), or a glob pattern (e.g. `"papers/*.pdf"`).
@@ -72,22 +72,22 @@ vtv <INPUT> [OPTIONS]
 
 ```sh
 # Default: raw markdown next to the input file
-vtv paper.pdf
+cnv paper.pdf
 
 # RAG chunks with a 300-token target
-vtv paper.pdf -f rag --chunk-size 300 -o out/
+cnv paper.pdf -f rag --chunk-size 300 -o out/
 
 # Karpathy wiki folder
-vtv paper.pdf -f karpathy -o wiki/
+cnv paper.pdf -f karpathy -o wiki/
 
 # Knowledge graph
-vtv paper.pdf -f kg -o graph/
+cnv paper.pdf -f kg -o graph/
 
 # Batch: all PDFs in a directory, verbose
-vtv docs/ -f raw -o out/ --verbose
+cnv docs/ -f raw -o out/ --verbose
 
 # Glob (quote to prevent shell expansion)
-vtv "reports/*.pdf" -f rag -o chunks/
+cnv "reports/*.pdf" -f rag -o chunks/
 ```
 
 ---
@@ -214,7 +214,7 @@ Example structure:
 
 Reading order recovery is non-trivial for PDFs because the file format stores text blocks in drawing order, not reading order. On a two-column page, MuPDF may return blocks interleaved between columns.
 
-`vtv` implements a variant of the XY-Cut algorithm. For a given set of blocks, the algorithm finds the largest horizontal whitespace gap (a gap between rows of blocks) and the largest vertical whitespace gap (a gap between columns). If a vertical gap is more than 20% larger than the best horizontal gap, the page is split vertically first — correctly isolating the left column from the right before any paragraph-level splitting happens. Otherwise the horizontal cut is taken, which preserves natural top-to-bottom reading order within a column. The process recurses on each sub-region until no gap exceeds the configured minimum (8 pt horizontal, 12 pt vertical by default). An in-order traversal of the resulting binary tree gives the reading sequence.
+`cnv` implements a variant of the XY-Cut algorithm. For a given set of blocks, the algorithm finds the largest horizontal whitespace gap (a gap between rows of blocks) and the largest vertical whitespace gap (a gap between columns). If a vertical gap is more than 20% larger than the best horizontal gap, the page is split vertically first — correctly isolating the left column from the right before any paragraph-level splitting happens. Otherwise the horizontal cut is taken, which preserves natural top-to-bottom reading order within a column. The process recurses on each sub-region until no gap exceeds the configured minimum (8 pt horizontal, 12 pt vertical by default). An in-order traversal of the resulting binary tree gives the reading sequence.
 
 The `--min-h-gap` and `--min-v-gap` flags let you tune the sensitivity. Raising `--min-v-gap` is useful for documents with narrow column gutters; lowering `--min-h-gap` helps when paragraph spacing is tight.
 
@@ -222,7 +222,7 @@ The `--min-h-gap` and `--min-v-gap` flags let you tune the sensitivity. Raising 
 
 ## Limitations
 
-- **Scanned PDFs produce no text.** If a PDF contains only rasterised page images (a common result of scanning physical documents), MuPDF returns no text blocks and `vtv` will produce an empty or near-empty output. OCR is not performed.
+- **Scanned PDFs produce no text.** If a PDF contains only rasterised page images (a common result of scanning physical documents), MuPDF returns no text blocks and `cnv` will produce an empty or near-empty output. OCR is not performed.
 
 - **Heading detection uses font size only.** The MuPDF 0.6 Rust wrapper does not expose per-character font names, so bold or small-caps body text at the body size cannot be distinguished from a normal paragraph. All heading detection is based on the font-size ratio relative to the document body size mode.
 
