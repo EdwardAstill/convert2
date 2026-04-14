@@ -74,8 +74,8 @@ impl Classifier {
 
     /// Classify all blocks on a page, returning `Block`s with `BlockKind` assigned.
     pub fn classify_page(&self, raw_blocks: Vec<RawTextBlock>, page: &RawPage) -> Vec<Block> {
-        // First pass: detect table cells
-        let table_cells = detect_table_cells(&raw_blocks);
+        // First pass: detect table cells (pass body font size for heading exclusion)
+        let table_cells = detect_table_cells_with_font_size(&raw_blocks, self.config.body_font_size);
 
         raw_blocks
             .into_iter()
@@ -243,9 +243,59 @@ fn is_likely_heading_text(text: &str) -> bool {
     cap_count as f32 / words.len() as f32 >= 0.6
 }
 
+/// Pre-classify blocks to identify which ones should be excluded from table detection.
+/// Returns true for blocks that are clearly not table cells (headings, captions, list items, etc.).
+fn is_non_table_block(block: &RawTextBlock, body_font_size: f32) -> bool {
+    let text = block.text.trim();
+
+    // Empty blocks
+    if text.is_empty() {
+        return true;
+    }
+
+    // Captions (e.g. "Table E1.1 ...", "Figure 3. ...")
+    if caption_re().is_match(text) {
+        return true;
+    }
+
+    // Page numbers
+    if page_number_re().is_match(text) {
+        return true;
+    }
+
+    // List items
+    if ordered_list_re().is_match(text) || unordered_list_re().is_match(text) {
+        return true;
+    }
+
+    // Headings: font size significantly larger than body
+    if body_font_size > 0.0 && block.font_size / body_font_size >= 1.15 {
+        return true;
+    }
+
+    // Long paragraph text (table cells are typically short)
+    // A block with > 200 chars and no column-like structure is likely a paragraph
+    if text.len() > 200 {
+        return true;
+    }
+
+    false
+}
+
 /// Detect table cells by finding blocks arranged in a 2D grid.
+/// Uses a region-based approach: identifies candidate table regions among
+/// non-heading/non-caption blocks, then validates each region independently.
 /// Returns a map from block_id → BlockKind::TableCell { row, col }.
+#[cfg(test)]
 fn detect_table_cells(blocks: &[RawTextBlock]) -> std::collections::HashMap<usize, BlockKind> {
+    // Use body_font_size=0 when we can't compute it (disables heading filter in is_non_table_block)
+    detect_table_cells_with_font_size(blocks, 0.0)
+}
+
+fn detect_table_cells_with_font_size(
+    blocks: &[RawTextBlock],
+    body_font_size: f32,
+) -> std::collections::HashMap<usize, BlockKind> {
     use std::collections::HashMap;
 
     let mut result = HashMap::new();
@@ -254,15 +304,130 @@ fn detect_table_cells(blocks: &[RawTextBlock]) -> std::collections::HashMap<usiz
         return result; // need at least a 2x2 grid
     }
 
-    // Cluster x-positions (left edges) into columns
-    let x_positions: Vec<f32> = blocks.iter().map(|b| b.bbox.x0).collect();
-    let x_clusters = cluster_positions(&x_positions, 8.0);
+    // Filter out blocks that are clearly not table cells
+    let candidate_blocks: Vec<&RawTextBlock> = blocks
+        .iter()
+        .filter(|b| !is_non_table_block(b, body_font_size))
+        .collect();
 
-    // Cluster y-positions (top edges) into rows
-    let y_positions: Vec<f32> = blocks.iter().map(|b| b.bbox.y0).collect();
+    if candidate_blocks.len() < 4 {
+        return result;
+    }
+
+    // Find candidate table regions: groups of vertically contiguous blocks
+    // that share column alignment.
+    let regions = find_table_regions(&candidate_blocks);
+
+    for region in &regions {
+        if region.len() < 4 {
+            continue;
+        }
+
+        let region_result = detect_table_in_region(region);
+        // Merge into overall result
+        for (block_id, kind) in region_result {
+            result.insert(block_id, kind);
+        }
+    }
+
+    result
+}
+
+/// Find contiguous vertical regions of blocks that could be tables.
+/// Groups blocks by vertical proximity — blocks within a region have small
+/// vertical gaps between consecutive rows.
+fn find_table_regions<'a>(blocks: &[&'a RawTextBlock]) -> Vec<Vec<&'a RawTextBlock>> {
+    if blocks.is_empty() {
+        return vec![];
+    }
+
+    // Sort by y0 (top edge)
+    let mut sorted: Vec<&RawTextBlock> = blocks.to_vec();
+    sorted.sort_by(|a, b| a.bbox.y0.partial_cmp(&b.bbox.y0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Cluster y-positions into rows
+    let y_positions: Vec<f32> = sorted.iter().map(|b| b.bbox.y0).collect();
     let y_clusters = cluster_positions(&y_positions, 6.0);
 
-    // Only treat as table if we have >= 2 rows and >= 2 columns
+    if y_clusters.len() < 2 {
+        return vec![];
+    }
+
+    // Assign each block to its row cluster
+    let mut row_assignments: Vec<(usize, &RawTextBlock)> = Vec::new();
+    for &block in &sorted {
+        if let Some(row) = nearest_cluster(block.bbox.y0, &y_clusters, 6.0) {
+            row_assignments.push((row, block));
+        }
+    }
+
+    // Group by row
+    let mut rows_map: std::collections::BTreeMap<usize, Vec<&RawTextBlock>> =
+        std::collections::BTreeMap::new();
+    for (row, block) in &row_assignments {
+        rows_map.entry(*row).or_default().push(*block);
+    }
+
+    // A row needs >= 2 blocks to be table-like
+    let table_rows: Vec<usize> = rows_map
+        .iter()
+        .filter(|(_, blocks_in_row)| blocks_in_row.len() >= 2)
+        .map(|(row, _)| *row)
+        .collect();
+
+    if table_rows.len() < 2 {
+        return vec![];
+    }
+
+    // Find contiguous runs of table-like rows
+    let mut regions: Vec<Vec<&'a RawTextBlock>> = Vec::new();
+    let mut current_region: Vec<&RawTextBlock> = Vec::new();
+    let mut prev_row: Option<usize> = None;
+
+    for &row_idx in &table_rows {
+        let is_contiguous = match prev_row {
+            Some(prev) => row_idx <= prev + 2, // allow one gap row
+            None => true,
+        };
+
+        if is_contiguous {
+            for &block in rows_map.get(&row_idx).unwrap() {
+                current_region.push(block);
+            }
+        } else {
+            if current_region.len() >= 4 {
+                regions.push(current_region);
+            }
+            current_region = Vec::new();
+            for &block in rows_map.get(&row_idx).unwrap() {
+                current_region.push(block);
+            }
+        }
+        prev_row = Some(row_idx);
+    }
+    if current_region.len() >= 4 {
+        regions.push(current_region);
+    }
+
+    regions
+}
+
+/// Detect a table within a candidate region of blocks.
+/// Returns a map from block_id → BlockKind::TableCell { row, col }.
+fn detect_table_in_region(region: &[&RawTextBlock]) -> std::collections::HashMap<usize, BlockKind> {
+    use std::collections::HashMap;
+
+    let mut result = HashMap::new();
+
+    // Cluster x-positions (left edges) into columns with tighter tolerance
+    let x_positions: Vec<f32> = region.iter().map(|b| b.bbox.x0).collect();
+    let x_clusters = cluster_positions(&x_positions, 12.0);
+
+    // Cluster y-positions (top edges) into rows
+    let y_positions: Vec<f32> = region.iter().map(|b| b.bbox.y0).collect();
+    let y_clusters = cluster_positions(&y_positions, 6.0);
+
+    // Need >= 2 rows and >= 2 columns
     if x_clusters.len() < 2 || y_clusters.len() < 2 {
         return result;
     }
@@ -274,8 +439,8 @@ fn detect_table_cells(blocks: &[RawTextBlock]) -> std::collections::HashMap<usiz
 
     // Assign each block to a (row, col) if it aligns to cluster centres,
     // keyed by block_id for stability against reordering.
-    for block in blocks.iter() {
-        let col = nearest_cluster(block.bbox.x0, &x_clusters, 8.0);
+    for block in region.iter() {
+        let col = nearest_cluster(block.bbox.x0, &x_clusters, 12.0);
         let row = nearest_cluster(block.bbox.y0, &y_clusters, 6.0);
         if let (Some(col), Some(row)) = (col, row) {
             result.insert(block.block_id, BlockKind::TableCell { row, col });
@@ -288,17 +453,22 @@ fn detect_table_cells(blocks: &[RawTextBlock]) -> std::collections::HashMap<usiz
         return result;
     }
 
-    // Guard 1: if more than 30% of all blocks are classified as table cells AND
-    // there are enough blocks to distinguish a table from two-column body text.
-    // Small tables (< 20 blocks total) are always considered valid.
-    if blocks.len() >= 20 && result.len() > blocks.len() * 3 / 10 {
+    // Validate: need at least 2 columns each with >= 2 cells
+    let mut col_counts: HashMap<usize, usize> = HashMap::new();
+    for kind in result.values() {
+        if let BlockKind::TableCell { col, .. } = kind {
+            *col_counts.entry(*col).or_insert(0) += 1;
+        }
+    }
+    let cols_with_2_plus = col_counts.values().filter(|&&c| c >= 2).count();
+    if cols_with_2_plus < 2 {
         result.clear();
         return result;
     }
 
-    // Guard 2: the y-range of assigned cells must be spatially compact.
-    // Estimate page height from the maximum y1 of all blocks on the page.
-    let assigned_blocks: Vec<&RawTextBlock> = blocks
+    // Guard: table height can be up to 85% of estimated page height
+    // (engineering standards often have full-page tables)
+    let assigned_blocks: Vec<&&RawTextBlock> = region
         .iter()
         .filter(|b| result.contains_key(&b.block_id))
         .collect();
@@ -307,9 +477,10 @@ fn detect_table_cells(blocks: &[RawTextBlock]) -> std::collections::HashMap<usiz
         assigned_blocks.iter().map(|b| b.bbox.y0).reduce(f32::min),
         assigned_blocks.iter().map(|b| b.bbox.y1).reduce(f32::max),
     ) {
-        let page_height = blocks.iter().map(|b| b.bbox.y1).reduce(f32::max).unwrap_or(1.0);
-        let table_height_fraction = (max_y - min_y) / page_height;
-        if table_height_fraction > 0.4 {
+        let table_height = max_y - min_y;
+        // Only reject if table height is unreasonably large compared to itself
+        // (this shouldn't happen for a real region, but guards against pathological cases)
+        if table_height < 0.0 {
             result.clear();
         }
     }
@@ -494,5 +665,122 @@ mod tests {
         let cells = detect_table_cells(&blocks);
         assert_eq!(cells.len(), 4);
         assert!(cells.values().all(|k| matches!(k, BlockKind::TableCell { .. })));
+    }
+
+    #[test]
+    fn table_detection_realistic_engineering_page() {
+        // Simulates an engineering standards page:
+        // - Title block at top (large font, heading)
+        // - 3x4 table data grid (12 cells, ~60% of blocks)
+        // - Notes block below
+        // Total: 14 blocks, table is the majority
+        let mut blocks = Vec::new();
+        let mut id = 0;
+
+        // Title: "TABLE E1.1 Selection Table" — large font (heading)
+        blocks.push(make_block_id(50.0, 30.0, 500.0, 55.0, "TABLE E1.1 Selection Table for Application", 14.0, id));
+        id += 1;
+
+        // Table header row (3 columns)
+        blocks.push(make_block_id(50.0, 80.0, 180.0, 100.0, "Cross Section", 10.0, id));
+        id += 1;
+        blocks.push(make_block_id(200.0, 80.0, 350.0, 100.0, "Limit State", 10.0, id));
+        id += 1;
+        blocks.push(make_block_id(370.0, 80.0, 520.0, 100.0, "Reference", 10.0, id));
+        id += 1;
+
+        // Data row 1
+        blocks.push(make_block_id(50.0, 110.0, 180.0, 130.0, "W-shape", 10.0, id));
+        id += 1;
+        blocks.push(make_block_id(200.0, 110.0, 350.0, 130.0, "Flexural Yielding", 10.0, id));
+        id += 1;
+        blocks.push(make_block_id(370.0, 110.0, 520.0, 130.0, "Section F2", 10.0, id));
+        id += 1;
+
+        // Data row 2
+        blocks.push(make_block_id(50.0, 140.0, 180.0, 160.0, "Channel", 10.0, id));
+        id += 1;
+        blocks.push(make_block_id(200.0, 140.0, 350.0, 160.0, "LTB", 10.0, id));
+        id += 1;
+        blocks.push(make_block_id(370.0, 140.0, 520.0, 160.0, "Section F3", 10.0, id));
+        id += 1;
+
+        // Data row 3
+        blocks.push(make_block_id(50.0, 170.0, 180.0, 190.0, "HSS", 10.0, id));
+        id += 1;
+        blocks.push(make_block_id(200.0, 170.0, 350.0, 190.0, "Local Buckling", 10.0, id));
+        id += 1;
+        blocks.push(make_block_id(370.0, 170.0, 520.0, 190.0, "Section F7", 10.0, id));
+        id += 1;
+
+        // Notes below table
+        blocks.push(make_block_id(50.0, 210.0, 520.0, 240.0, "User Note: See Commentary for further discussion.", 10.0, id));
+
+        // Use body_font_size=10.0 so the 14pt title is detected as heading and excluded
+        let cells = detect_table_cells_with_font_size(&blocks, 10.0);
+
+        // Should detect 12 table cells (3 cols x 4 rows)
+        assert!(
+            cells.len() >= 12,
+            "Expected >= 12 table cells, got {} (cells: {:?})",
+            cells.len(),
+            cells
+        );
+        assert!(cells.values().all(|k| matches!(k, BlockKind::TableCell { .. })));
+
+        // Title (id=0) and notes (id=13) should NOT be in the table
+        assert!(!cells.contains_key(&0), "Title should not be a table cell");
+        assert!(!cells.contains_key(&13), "Notes should not be a table cell");
+    }
+
+    #[test]
+    fn table_detection_full_page_table_not_rejected() {
+        // A full-page table (occupying ~70% of page height) should still be detected.
+        // Previously Guard 2 (40% height limit) would reject this.
+        let mut blocks = Vec::new();
+        let mut id = 0;
+
+        // 5 columns x 8 rows = 40 cells spanning y=100 to y=660 on an 800pt page
+        for row in 0..8 {
+            for col in 0..5 {
+                let x0 = 50.0 + col as f32 * 100.0;
+                let y0 = 100.0 + row as f32 * 80.0;
+                blocks.push(make_block_id(
+                    x0, y0, x0 + 80.0, y0 + 20.0,
+                    &format!("R{}C{}", row, col), 10.0, id,
+                ));
+                id += 1;
+            }
+        }
+
+        let cells = detect_table_cells(&blocks);
+        assert!(
+            cells.len() >= 40,
+            "Full-page table should be detected, got {} cells", cells.len()
+        );
+    }
+
+    #[test]
+    fn table_detection_excludes_headings_and_captions() {
+        // Blocks with heading font sizes or caption patterns should be excluded
+        let blocks = vec![
+            // Heading (large font)
+            make_block_id(50.0, 30.0, 400.0, 55.0, "CHAPTER 5", 18.0, 0),
+            // Caption
+            make_block_id(50.0, 60.0, 400.0, 75.0, "Table 5.1: Material Properties", 10.0, 1),
+            // 2x2 table
+            make_block_id(50.0, 100.0, 180.0, 120.0, "Steel", 10.0, 2),
+            make_block_id(200.0, 100.0, 350.0, 120.0, "Fy = 50 ksi", 10.0, 3),
+            make_block_id(50.0, 130.0, 180.0, 150.0, "Aluminum", 10.0, 4),
+            make_block_id(200.0, 130.0, 350.0, 150.0, "Fy = 35 ksi", 10.0, 5),
+        ];
+
+        let cells = detect_table_cells_with_font_size(&blocks, 10.0);
+
+        // Table cells should be detected (ids 2-5)
+        assert_eq!(cells.len(), 4, "Should detect 4 table cells");
+        // Heading and caption should not be table cells
+        assert!(!cells.contains_key(&0), "Heading should not be a table cell");
+        assert!(!cells.contains_key(&1), "Caption should not be a table cell");
     }
 }

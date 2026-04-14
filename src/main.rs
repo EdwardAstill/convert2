@@ -107,6 +107,16 @@ fn process_one(
         })
         .collect();
 
+    // Warn about pages with no extractable text (possibly scanned)
+    let empty_page_count = pages.iter().filter(|p| p.blocks.is_empty()).count();
+    if empty_page_count > 0 {
+        eprintln!(
+            "  warning: {} of {} pages have no extractable text (possibly scanned)",
+            empty_page_count,
+            pages.len()
+        );
+    }
+
     let doc = Document {
         source_path: pdf_path.to_path_buf(),
         pages,

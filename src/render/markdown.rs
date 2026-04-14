@@ -65,6 +65,14 @@ impl MarkdownRenderer {
         // Emit a page boundary marker (1-indexed, invisible when rendered)
         md.push_str(&format!("<!-- page:{} -->\n", page.page_num + 1));
 
+        // Warn if page has no extractable text (scanned image or empty page)
+        if page.blocks.is_empty() {
+            md.push_str(&format!(
+                "<!-- WARNING: page {} has no extractable text (scanned image or empty page) -->\n",
+                page.page_num + 1
+            ));
+        }
+
         // Sort blocks by reading_order
         let mut blocks: Vec<&Block> = page.blocks.iter().collect();
         blocks.sort_by_key(|b| b.reading_order);
@@ -462,5 +470,45 @@ mod tests {
         );
         assert_eq!(parse_heading_line("Not a heading"), None);
         assert_eq!(parse_heading_line("##"), None); // no title after hashes
+    }
+
+    #[test]
+    fn scanned_page_warning_emitted() {
+        // A page with no blocks should produce a WARNING comment
+        let page = Page {
+            page_num: 2, // 0-indexed → page 3 in output
+            width: 595.0,
+            height: 842.0,
+            blocks: vec![],
+        };
+        let doc = make_doc(vec![page]);
+        let renderer = MarkdownRenderer::new(false, None);
+        let result = renderer.render_document(&doc).unwrap();
+        assert!(
+            result.markdown.contains("<!-- WARNING: page 3 has no extractable text (scanned image or empty page) -->"),
+            "Expected scanned page warning in markdown, got: {}",
+            result.markdown
+        );
+        // Should also have the page marker
+        assert!(result.markdown.contains("<!-- page:3 -->"));
+    }
+
+    #[test]
+    fn no_warning_for_page_with_blocks() {
+        let page = Page {
+            page_num: 0,
+            width: 595.0,
+            height: 842.0,
+            blocks: vec![
+                make_block(0, "Some text", BlockKind::Paragraph, 0),
+            ],
+        };
+        let doc = make_doc(vec![page]);
+        let renderer = MarkdownRenderer::new(false, None);
+        let result = renderer.render_document(&doc).unwrap();
+        assert!(
+            !result.markdown.contains("WARNING"),
+            "Should not have WARNING for page with blocks"
+        );
     }
 }
