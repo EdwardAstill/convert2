@@ -28,6 +28,12 @@ regex = "1"
 unicode-segmentation = "1"
 # Glob pattern matching for batch input
 glob = "0.3"
+pulldown-cmark = "0.13.3"
+toml = "1.1.2"
+zip = "8.5.1"
+quick-xml = "0.39.2"
+scraper = "0.26.0"
+resvg = "0.47.0"
 
 [profile.release]
 opt-level = 3

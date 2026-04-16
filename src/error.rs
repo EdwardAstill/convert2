@@ -31,6 +31,27 @@ pub enum VtvError {
 
     #[error("PDF is password-protected, cannot process: {0}")]
     PasswordProtected(PathBuf),
+
+    #[error("Failed to parse DOCX '{path}': {message}")]
+    DocxParse { path: PathBuf, message: String },
+
+    #[error("Failed to parse EPUB '{path}': {message}")]
+    EpubParse { path: PathBuf, message: String },
+
+    #[error("Failed to parse PPTX '{path}': {message}")]
+    PptxParse { path: PathBuf, message: String },
+
+    #[error("Failed to parse HTML '{path}': {message}")]
+    HtmlParse { path: PathBuf, message: String },
+
+    #[error("Failed to convert SVG '{path}': {message}")]
+    SvgConvert { path: PathBuf, message: String },
+
+    #[error("Failed to convert Markdown to Typst: {0}")]
+    TypstConvert(String),
+
+    #[error("Unsupported conversion: {0}")]
+    UnsupportedConversion(String),
 }
 
 /// Convenience result type for vtv operations.

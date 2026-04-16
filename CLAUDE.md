@@ -1,109 +1,164 @@
-# cnv — convert2 PDF-to-Markdown CLI
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project purpose
 
-`cnv` converts PDF files into AI-friendly markdown structures. It solves the problem of feeding PDF content into LLM pipelines by extracting text with layout analysis, classifying blocks by semantic role, and writing output in one of four formats optimized for different downstream uses (plain markdown, RAG chunking, Obsidian-style wikilinks, or a knowledge graph).
-
-## Architecture overview
-
-Pipeline per PDF:
-
-```
-PDF file
-  └─ PdfExtractor::extract()        → (Vec<RawPage>, DocumentMetadata)
-       └─ build_xycut_tree()         → XyCutNode  (reading order tree)
-       └─ assign_reading_order()     → mutates RawTextBlock.reading_order
-       └─ Classifier::classify_page() → Vec<Block>  (with BlockKind assigned)
-           └─ assembled into Document { pages, metadata, source_path }
-               └─ MarkdownRenderer::render_document() → RenderedDocument
-                   └─ Format::write()  → files on disk
-```
-
-### Module map
-
-- `src/pdf/extractor.rs` — mupdf integration; `PdfExtractor::extract()` opens the PDF once and returns all `RawPage`s plus `DocumentMetadata`.
-- `src/layout/xycut.rs` — XY-Cut++ algorithm; `build_xycut_tree()` returns an `XyCutNode` tree, `assign_reading_order()` walks it to stamp `reading_order` onto each `RawTextBlock`.
-- `src/layout/classifier.rs` — font-size-based block classification; `Classifier::new_for_document()` computes the body font size as the document-wide mode, then `classify_page()` assigns `BlockKind` to each block.
-- `src/document/types.rs` — all shared structs: `Bbox`, `RawTextBlock`, `ImageRef`, `Block`, `BlockKind`, `RawPage`, `Page`, `DocumentMetadata`, `Document`, `Section`, `ExtractedImage`.
-- `src/render/markdown.rs` — `MarkdownRenderer` turns `Document` → `RenderedDocument` (full markdown string + `Vec<Section>` + extracted images); emits `<!-- page:N -->` markers and calls `split_into_sections()` which parses them to populate `Section.page_start`/`page_end`.
-- `src/formats/raw.rs` — writes `<stem>.md` + `images/` directory.
-- `src/formats/rag.rs` — splits into `<stem>_chunk_NNNN.md` files (~500 tokens each, configurable) with YAML frontmatter (source, chunk_index, total_chunks, section_title, page_start, page_end).
-- `src/formats/karpathy.rs` — one `.md` per section (slugified filename) with `[[WikiLink]]` cross-refs injected, plus `index.md` listing all sections.
-- `src/formats/kg.rs` — writes `<stem>_graph.json` containing Section/Concept/Citation nodes and Contains/Cites/RelatedTo weighted edges.
-- `src/batch.rs` — `resolve_inputs()` accepts a file path, directory, or glob and returns `Vec<PathBuf>`; `output_dir_for()` computes the output directory.
-- `src/cli.rs` — clap `Cli` struct and `Format` enum (`Raw`, `Rag`, `Karpathy`, `Kg`).
-- `src/main.rs` — orchestrates the pipeline in a sequential `.iter().map()` loop (no rayon — see gotchas).
-- `src/error.rs` — `VtvError` (thiserror) and `VtvResult<T>` alias.
-
-## Key design decisions and gotchas
-
-- **mupdf 0.6.0 does not expose font names.** `TextChar` only has `char()`, `origin()`, `size()`, `quad()`. `PdfExtractor::dominant_font_name()` always returns `"unknown"`. The classifier uses font size only for heading detection — do not add font-name logic without first verifying the mupdf Rust wrapper version exposes it.
-
-- **mupdf is not thread-safe.** `par_iter` / rayon was removed. The outer loop in `main.rs` is a plain sequential `.iter().map()`. Do not re-introduce `par_iter` without confirming mupdf thread safety.
-
-- **mupdf `Rect` is `(x0, y0, x1, y1)` corner coords, not `(x, y, w, h)`.** `Bbox` mirrors this exactly. Page width/height are computed as `bounds.x1 - bounds.x0` / `bounds.y1 - bounds.y0`.
-
-- **Coordinate origin is top-left, Y increases downward.** This matches screen/PDF convention. `Bbox::vertical_gap_to(other)` returns `other.y0 - self.y1` (positive = gap below).
-
-- **`TextPageFlags::PRESERVE_IMAGES` must be passed** to `page.to_text_page()` to get `TextBlockType::Image` blocks; omitting it silently drops all image refs.
-
-- **`<!-- page:N -->` markers** are emitted by `MarkdownRenderer::render_page()` (1-indexed) and consumed by `split_into_sections()` to track page boundaries on `Section`. Markers are stripped from section content.
-
-- **Table cell detection uses `block_id` as the HashMap key** (stable index within the page, assigned by mupdf block enumeration), not positional index into the vec, which can shift after sorting.
-
-- **Heading level is derived from font size ratio** against the document-mode body size. Ratios: >=2.0→H1, >=1.6→H2, >=1.35→H3, >=1.15→H4, else H5. `heading_size_ratio` config (default 1.15) is the minimum ratio to trigger any heading classification.
-
-- **KG concept nodes require frequency >= 2** to filter single-occurrence noise. Concepts that match a section title are suppressed (they already have a Section node).
-
-- **RAG overlap** is approximated by char count (`overlap_tokens * 4`), not true token count. The `estimate_tokens` function uses `len / 4` throughout.
-
-- **First `cargo build` is slow** (~5 min). mupdf bundles ~55 MB of C source compiled via `cc` during the build. Requires `clang` and `bindgen` dependencies. Subsequent builds are incremental.
-
-- **`rayon` is listed in `Cargo.toml`** but is not currently used. It was removed from the hot path to fix a thread-safety crash. The dependency is retained but must not be used for PDF processing.
+`cnv` is a multi-format file converter. It converts documents (PDF, DOCX, EPUB, PPTX, HTML) into AI-friendly markdown, converts Markdown to Typst, and converts SVG to PNG. Single self-contained Rust binary with no runtime dependencies.
 
 ## Build and test
 
 ```bash
 # Prerequisites: clang, libclang-dev (for mupdf bindgen)
 cargo build --release        # binary at target/release/cnv
-cargo test                   # 20 unit tests across xycut, classifier, renderer
+cargo test                   # 95 unit tests
 cargo clippy -- -D warnings  # must be clean before committing
+
+# Run a single test
+cargo test typst::latex2typst::tests::test_frac
+# Run all tests in a module
+cargo test typst::converter::tests
 ```
+
+First `cargo build` is slow (~5 min) because mupdf bundles ~55 MB of C source compiled via `cc`. Subsequent builds are incremental.
 
 ### Usage
 
 ```bash
-cnv paper.pdf                        # raw format, output next to input
-cnv paper.pdf -f rag --chunk-size 800
-cnv paper.pdf -f karpathy -o ./notes/
-cnv paper.pdf -f kg
-cnv "papers/*.pdf" -f rag -o ./out/  # glob input
-cnv ./papers/ -f raw                 # directory input
+cnv paper.pdf                          # PDF → raw markdown (default)
+cnv paper.pdf -f rag --chunk-size 800  # PDF → RAG chunks
+cnv paper.docx -f karpathy             # DOCX → wiki-style markdown
+cnv book.epub                          # EPUB → raw markdown
+cnv slides.pptx -o ./notes/            # PPTX → markdown
+cnv page.html -f kg                    # HTML → knowledge graph JSON
+cnv notes.md                           # Markdown → Typst (default for .md)
+cnv notes.md --paper a4 --stdout       # Markdown → Typst with paper size, to stdout
+cnv diagram.svg                        # SVG → PNG (default for .svg)
+cnv "papers/*.pdf" -f rag -o ./out/    # glob input
+cnv ./papers/                          # directory input (all supported types)
 ```
 
-CLI flags: `--format` (`raw`|`rag`|`karpathy`|`kg`), `--output`, `--chunk-size`, `--min-h-gap`, `--min-v-gap`, `--no-images`, `--verbose`.
+## Architecture overview
+
+Three conversion pipeline families, dispatched by input file extension in `main.rs::process_one()`:
+
+### Pipeline A: Document → Markdown (PDF, DOCX, EPUB, PPTX, HTML)
+
+```
+Input file → Extractor → Document → MarkdownRenderer → RenderedDocument → Format writer
+                                                                           ├─ raw (single .md)
+                                                                           ├─ rag (chunked .md files)
+                                                                           ├─ karpathy (wiki folder)
+                                                                           └─ kg (JSON graph)
+```
+
+Each input type has its own extractor that produces a `Document`. The rest of the pipeline (rendering + format writing) is shared.
+
+**PDF pipeline** is the most complex — it goes through additional stages:
+```
+PdfExtractor::extract() → (Vec<RawPage>, DocumentMetadata)
+  → build_xycut_tree() → assign_reading_order()    [layout analysis]
+  → Classifier::classify_page()                     [block classification]
+  → Document
+```
+
+**DOCX/EPUB/PPTX** extractors use `zip` + `quick-xml` to parse OOXML/EPUB ZIP archives directly. **HTML** and **EPUB** (for chapter content) use `scraper` (html5ever). These formats already have semantic structure, so no layout analysis or classification is needed — extractors produce `Document` with classified `Block`s directly.
+
+### Pipeline B: Markdown → Typst
+
+```
+.md file → pulldown-cmark parser → TypstRenderer → .typ file
+                                      └─ latex_to_typst() for math expressions
+```
+
+Ported from the Python `md2typ` project. The LaTeX→Typst math translation is a 5-stage pipeline in `src/typst/latex2typst.rs` (environments → structured commands → simple replacements → scripts → identifier quoting). Config loaded from `$XDG_CONFIG_HOME/mdtyp/config.toml` or `--typst-config`.
+
+### Pipeline C: SVG → PNG
+
+```
+.svg file → resvg → .png file
+```
+
+### Input/output format validation
+
+Format is auto-detected from extension. `InputType::supports_format()` in `cli.rs` validates combinations:
+- `.pdf/.docx/.epub/.pptx/.html` → `raw`, `rag`, `karpathy`, `kg`
+- `.md` → `typst`
+- `.svg` → `png`
+
+`-f` defaults to `raw` for documents, `typst` for `.md`, `png` for `.svg`.
+
+### Key types (src/document/types.rs)
+
+`Document { pages, metadata, source_path }` is the universal intermediate representation. All extractors produce it; the renderer and format writers consume it. `Page` contains `Vec<Block>`, each with a `BlockKind` (Heading, Paragraph, ListItem, TableCell, Caption, CodeBlock, PageNumber, RunningHeader, RunningFooter, Image).
+
+`RenderedDocument { markdown, sections, images }` is the markdown-rendered form consumed by format writers.
+
+### Module map
+
+| Module | Purpose |
+|---|---|
+| `src/main.rs` | Pipeline dispatch by `InputType`, shared `write_document()` |
+| `src/cli.rs` | Clap CLI, `Format` enum, `InputType` enum with validation |
+| `src/batch.rs` | `resolve_inputs()` (file/dir/glob → `Vec<PathBuf>`), `output_dir_for()` |
+| `src/document/types.rs` | All shared types: `Document`, `Page`, `Block`, `BlockKind`, `Bbox`, etc. |
+| `src/error.rs` | `VtvError` (thiserror) and `VtvResult<T>` |
+| `src/pdf/extractor.rs` | mupdf integration, text/image extraction |
+| `src/layout/xycut.rs` | XY-Cut++ reading order algorithm |
+| `src/layout/classifier.rs` | Font-size-based block classification |
+| `src/render/markdown.rs` | `Document` → `RenderedDocument` |
+| `src/formats/{raw,rag,karpathy,kg}.rs` | Output format writers |
+| `src/docx/extractor.rs` | DOCX extraction (zip + quick-xml) |
+| `src/epub/extractor.rs` | EPUB extraction (zip + quick-xml + scraper) |
+| `src/pptx/extractor.rs` | PPTX extraction (zip + quick-xml) |
+| `src/html_extract/extractor.rs` | HTML extraction (scraper) |
+| `src/typst/converter.rs` | Markdown → Typst (pulldown-cmark event-driven renderer) |
+| `src/typst/latex2typst.rs` | LaTeX math → Typst math translation |
+| `src/typst/config.rs` | Typst converter TOML config |
+| `src/svg/converter.rs` | SVG → PNG (resvg) |
+
+## Key design decisions and gotchas
+
+- **mupdf 0.6.0 does not expose font names.** Classification uses font size only. Do not add font-name logic without verifying the mupdf wrapper version.
+
+- **mupdf is not thread-safe.** The outer loop in `main.rs` is sequential `.iter().map()`. Do not use `par_iter`/rayon for PDF processing.
+
+- **mupdf `Rect` is `(x0, y0, x1, y1)` corner coords, not `(x, y, w, h)`.** `Bbox` mirrors this. Coordinate origin is top-left, Y increases downward.
+
+- **`TextPageFlags::PRESERVE_IMAGES` must be passed** to `page.to_text_page()` or image blocks are silently dropped.
+
+- **`<!-- page:N -->` markers** are emitted by `MarkdownRenderer` (1-indexed) and consumed by `split_into_sections()` for page tracking. Stripped from section content.
+
+- **Heading level is derived from font size ratio** against body mode: >=2.0→H1, >=1.6→H2, >=1.35→H3, >=1.15→H4, else H5.
+
+- **RAG token estimation** uses `len / 4` (char count proxy), not real tokenization.
+
+- **LaTeX→Typst pipeline order matters.** Stages must run in sequence: environments → structured commands → simple replacements → scripts → identifier quoting. Each stage assumes prior stages have completed. The `_COMMANDS` list is sorted longest-first at runtime to prevent partial matches.
+
+- **pulldown-cmark table model differs from markdown-it-py.** Header cells are direct children of `TableHead` (no `TableRow` wrapper). The Typst converter handles this at `End(TableHead)` rather than `End(TableRow)`.
+
+- **Rust `regex` crate does not support backreferences.** The aligned environment regex uses duplicate alternation `(?:aligned|align\*?)` instead of `\1`.
+
+- **quick-xml 0.39 API:** Use `BytesText::decode()` (not `unescape()`) and `Attribute::unescape_value()`.
+
+- **`rayon` is listed in `Cargo.toml`** but must not be used for PDF processing due to mupdf thread-safety.
+
+- **Error types use legacy naming:** `VtvError`/`VtvResult` in `src/error.rs` — inherited from original codebase, not renamed.
+
+## Adding a new input extractor
+
+1. Create `src/newformat/mod.rs` and `src/newformat/extractor.rs`
+2. Implement `pub fn extract(path: &Path) -> VtvResult<Document>` — produce a `Document` with classified `Block`s
+3. Add `mod newformat;` to `src/main.rs`
+4. Add variant to `InputType` in `src/cli.rs`, update `from_path()`, `default_format()`, `supports_format()`, `extensions()`
+5. Add extension(s) to `SUPPORTED_EXTENSIONS` in `src/cli.rs`
+6. Add `InputType::NewFormat => process_newformat(path, cli, &format)` in `process_one()` match
+7. Implement `process_newformat()` — typically just calls your extractor then `write_document()`
 
 ## Adding a new output format
 
-1. Create `src/formats/newformat.rs`. Implement a struct with a `write(rendered: &RenderedDocument, doc: &Document, output_dir: &Path, stem: &str) -> VtvResult<()>` method. Use `VtvError::Io` for all `fs::` errors. (`VtvError`/`VtvResult` are defined in `src/error.rs` — the internal type names were not changed from the original codebase.)
-
-2. Add `pub mod newformat;` to `src/formats/mod.rs`.
-
-3. Add a variant to the `Format` enum in `src/cli.rs`:
-   ```rust
-   #[derive(ValueEnum, Debug, Clone, PartialEq)]
-   pub enum Format {
-       Raw, Rag, Karpathy, Kg,
-       Newformat,  // add here
-   }
-   ```
-
-4. Add a match arm in `main.rs` inside `process_one()`:
-   ```rust
-   Format::Newformat => {
-       formats::newformat::NewFormat::write(&rendered, &doc, &output_dir, &stem)
-           .with_context(|| format!("Failed to write newformat output to {}", output_dir.display()))?;
-   }
-   ```
-
-The format receives a fully-rendered `RenderedDocument` (`.markdown: String`, `.sections: Vec<Section>`, `.images: Vec<ExtractedImage>`) and the original `Document` (for metadata and source path). The output directory is pre-determined by `batch::output_dir_for()`; formats create it themselves via `fs::create_dir_all`.
+1. Create `src/formats/newformat.rs` with `write(rendered: &RenderedDocument, doc: &Document, output_dir: &Path, stem: &str) -> VtvResult<()>`
+2. Add `pub mod newformat;` to `src/formats/mod.rs`
+3. Add variant to `Format` enum in `src/cli.rs`
+4. Update `InputType::supports_format()` for which input types can use it
+5. Add match arm in `write_document()` in `main.rs`
