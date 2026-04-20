@@ -50,6 +50,47 @@ pub struct Cli {
     /// Write output to stdout (Typst format only)
     #[arg(long)]
     pub stdout: bool,
+
+    /// Route PDFs through an external backend for higher-quality extraction
+    /// (LaTeX formulas, complex tables, OCR). `off` (default) = fully local;
+    /// `docling` = POST the whole PDF to a running `docling-serve` instance.
+    #[arg(long, value_enum, default_value = "off")]
+    pub hybrid: HybridMode,
+
+    /// Base URL of the hybrid backend (docling-serve). Only used when
+    /// `--hybrid` is not `off`.
+    #[arg(long, default_value = "http://localhost:5001")]
+    pub hybrid_url: String,
+
+    /// Timeout in seconds for the hybrid backend call. Large scanned PDFs on
+    /// CPU can take minutes.
+    #[arg(long, default_value = "600")]
+    pub hybrid_timeout_secs: u64,
+
+    /// Which pages to route through the hybrid backend. `auto` (default)
+    /// triages per page based on math-symbol count, table presence, and
+    /// text density — only formula-/table-/scan-heavy pages pay the
+    /// backend cost. `all` routes every page (useful for testing).
+    #[arg(long, value_enum, default_value = "auto")]
+    pub hybrid_policy: HybridPolicy,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridPolicy {
+    Auto,
+    All,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridMode {
+    Off,
+    Docling,
+}
+
+impl HybridMode {
+    pub fn is_on(self) -> bool {
+        !matches!(self, HybridMode::Off)
+    }
 }
 
 #[derive(ValueEnum, Debug, Clone, PartialEq)]
@@ -59,6 +100,8 @@ pub enum Format {
     Rag,
     Karpathy,
     Kg,
+    /// Structured JSON export of the document model (bboxes, item types).
+    Json,
     // Markdown → Typst (Pipeline B)
     Typst,
     // SVG → raster (Pipeline C)
@@ -107,7 +150,10 @@ impl InputType {
     pub fn supports_format(&self, format: &Format) -> bool {
         match self {
             Self::Pdf | Self::Docx | Self::Epub | Self::Pptx | Self::Html => {
-                matches!(format, Format::Raw | Format::Rag | Format::Karpathy | Format::Kg)
+                matches!(
+                    format,
+                    Format::Raw | Format::Rag | Format::Karpathy | Format::Kg | Format::Json
+                )
             }
             Self::Markdown => matches!(format, Format::Typst),
             Self::Svg => matches!(format, Format::Png),

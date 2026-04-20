@@ -78,11 +78,14 @@ pub struct RawTextBlock {
 }
 
 /// Reference to an image found on a page (via TextPage block iteration).
+/// Carries the decoded image bytes so the caller can save them to disk.
 #[derive(Clone, Debug)]
 pub struct ImageRef {
     pub page_num: usize,
     pub bbox: Bbox,
-    pub image_index: usize, // index within page's image blocks
+    pub image_index: usize, // 0-indexed within the page
+    pub bytes: Vec<u8>,     // encoded image bytes (PNG)
+    pub format: String,     // file extension without leading dot, e.g. "png"
 }
 
 /// Block kind — determined by the classifier after layout analysis.
@@ -98,6 +101,12 @@ pub enum BlockKind {
     RunningHeader,
     RunningFooter,
     Image { path: Option<String> },
+    /// A LaTeX-encoded math formula. Produced by the Docling hybrid backend.
+    /// `display=true` emits a `$$ … $$` block; `display=false` emits `$…$`.
+    Formula { latex: String, display: bool },
+    /// A figure with an optional caption, linked by relative path.
+    /// Produced by the Docling hybrid backend.
+    Figure { path: Option<String>, caption: Option<String> },
 }
 
 /// A classified, reading-order-assigned block.
@@ -136,6 +145,11 @@ pub struct Page {
     pub width: f32,
     pub height: f32,
     pub blocks: Vec<Block>, // sorted by reading_order
+    /// Optional override: if set, the renderer emits this markdown verbatim
+    /// for this page instead of serialising `blocks`. Populated by the
+    /// hybrid backend on a per-page basis when triage routes the page
+    /// through an external service (e.g. Docling).
+    pub override_markdown: Option<String>,
 }
 
 /// Document metadata from PDF info dictionary.

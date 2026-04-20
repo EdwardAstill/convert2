@@ -34,6 +34,7 @@ pub fn extract(path: &Path) -> VtvResult<Document> {
         width: 612.0, // standard letter size in points
         height: 792.0,
         blocks,
+        override_markdown: None,
     };
 
     Ok(Document {

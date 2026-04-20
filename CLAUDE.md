@@ -57,10 +57,19 @@ Each input type has its own extractor that produces a `Document`. The rest of th
 **PDF pipeline** is the most complex — it goes through additional stages:
 ```
 PdfExtractor::extract() → (Vec<RawPage>, DocumentMetadata)
-  → build_xycut_tree() → assign_reading_order()    [layout analysis]
+  → build_xycut_order() → assign_reading_order()    [layout analysis, XY-Cut++]
   → Classifier::classify_page()                     [block classification]
   → Document
 ```
+
+Layout analysis is a Rust port of OpenDataLoader's `XYCutPlusPlusSorter.java`
+(Hancom, Apache-2.0), based on arXiv:2504.10258. Four stages: (1) pre-mask
+cross-layout elements (wide headers/titles/footers), (2) compute density ratio
+(reserved for future tiebreaker), (3) recursive gap-based segmentation with
+narrow-outlier retry on the X axis, (4) merge cross-layout elements back by Y
+into the main stream. Coordinate system is top-left origin (y grows downward);
+the Java reference uses PDF y-up, so every Y comparison is flipped — see the
+module doc-comment in `src/layout/xycut.rs` for the translation table.
 
 **DOCX/EPUB/PPTX** extractors use `zip` + `quick-xml` to parse OOXML/EPUB ZIP archives directly. **HTML** and **EPUB** (for chapter content) use `scraper` (html5ever). These formats already have semantic structure, so no layout analysis or classification is needed — extractors produce `Document` with classified `Block`s directly.
 
@@ -82,7 +91,7 @@ Ported from the Python `md2typ` project. The LaTeX→Typst math translation is a
 ### Input/output format validation
 
 Format is auto-detected from extension. `InputType::supports_format()` in `cli.rs` validates combinations:
-- `.pdf/.docx/.epub/.pptx/.html` → `raw`, `rag`, `karpathy`, `kg`
+- `.pdf/.docx/.epub/.pptx/.html` → `raw`, `rag`, `karpathy`, `kg`, `json`
 - `.md` → `typst`
 - `.svg` → `png`
 
@@ -107,7 +116,7 @@ Format is auto-detected from extension. `InputType::supports_format()` in `cli.r
 | `src/layout/xycut.rs` | XY-Cut++ reading order algorithm |
 | `src/layout/classifier.rs` | Font-size-based block classification |
 | `src/render/markdown.rs` | `Document` → `RenderedDocument` |
-| `src/formats/{raw,rag,karpathy,kg}.rs` | Output format writers |
+| `src/formats/{raw,rag,karpathy,kg,json}/mod.rs` | Output format writers |
 | `src/docx/extractor.rs` | DOCX extraction (zip + quick-xml) |
 | `src/epub/extractor.rs` | EPUB extraction (zip + quick-xml + scraper) |
 | `src/pptx/extractor.rs` | PPTX extraction (zip + quick-xml) |
@@ -116,6 +125,56 @@ Format is auto-detected from extension. `InputType::supports_format()` in `cli.r
 | `src/typst/latex2typst.rs` | LaTeX math → Typst math translation |
 | `src/typst/config.rs` | Typst converter TOML config |
 | `src/svg/converter.rs` | SVG → PNG (resvg) |
+| `src/hybrid/mod.rs` | Hybrid backend — `apply_to_document` + `RoutingPolicy` + `HybridStats` |
+| `src/hybrid/client.rs` | `docling-serve` HTTP client (reqwest blocking) |
+| `src/hybrid/triage.rs` | Per-page routing decision (math density, tables, scan density) |
+| `src/hybrid/page_extract.rs` | Extract a single PDF page as bytes for upload |
+| `src/pdf/metadata.rs` | Phase 3 — optional font-name / weight / struct-tree sidecar (feature `pdfium-metadata`) |
+
+### Hybrid backend (Phase 2b — per-page routing)
+
+`--hybrid docling` runs the local mupdf pipeline first, then triages each
+resulting page: math-heavy pages, pages with detected tables, and pages with
+very low text density (likely scanned) are extracted as single-page PDFs,
+uploaded to `docling-serve`, and the returned markdown replaces the
+block-rendered output for just those pages. Simple prose pages stay on the
+fast local path and keep their images. Controlled via:
+
+- `--hybrid <off|docling>` (default `off`)
+- `--hybrid-url <url>` (default `http://localhost:5001`)
+- `--hybrid-timeout-secs <n>` (default `600`)
+- `--hybrid-policy <auto|all>` (default `auto`)
+
+`auto` uses the triage heuristics in `src/hybrid/triage.rs`. `all` routes
+every page (useful for tests and for users who want uniform Docling output).
+
+Per-page backend failures are logged and non-fatal: the affected page keeps
+its locally-rendered output and processing continues. The process exits 0.
+
+Pages that were routed carry their markdown in `Page.override_markdown`, and
+the renderer (`src/render/markdown.rs::render_page`) checks that field before
+serialising blocks. This is the "block-level merge" in Phase 2b — at page
+granularity, since docling-serve returns markdown per whole-PDF request.
+
+### Phase 3 — font-name metadata (optional, feature `pdfium-metadata`)
+
+mupdf 0.6's Rust wrapper does not surface font family, weight, or italic
+flags, so the classifier is stuck on font-size alone. Building with
+`--features pdfium-metadata` pulls in `pdfium-render` as a second-opinion
+PDF reader that exposes those attributes, which the classifier then layers
+on top of the size-ratio signal:
+
+- A struct-tree role (`H1`..`H6`, `Title`) overrides everything — tagged PDFs
+  get authoritative heading detection.
+- Bold at body size (weight ≥ 700, short line, not sentence-terminated) is
+  promoted to `Heading { level: 4 }` — rescues documents with no size
+  hierarchy.
+- Default build (feature off) falls back to size-only behaviour, unchanged.
+
+The feature flag dynamically loads `libpdfium` at runtime, so users must
+install it separately (apt/pacman/brew or pdfium-binaries releases). When
+the library is missing or fails to load, the loader logs a warning and the
+classifier silently degrades to size-only — it never panics.
 
 ## Key design decisions and gotchas
 

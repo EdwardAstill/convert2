@@ -1,6 +1,7 @@
 use regex::Regex;
 use std::sync::OnceLock;
 use crate::document::types::{Block, BlockKind, RawPage, RawTextBlock};
+use crate::pdf::metadata::PageMetadata;
 
 // --- Regex patterns (compiled once) ---
 
@@ -30,6 +31,18 @@ fn code_block_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // Heuristic: starts with common code patterns
     RE.get_or_init(|| Regex::new(r"^\s*(```|~~~|def |fn |pub |class |import |from |#include|int |void |return )").unwrap())
+}
+
+fn struct_role_to_heading_level(role: &str) -> Option<u8> {
+    match role {
+        "H1" | "Title" => Some(1),
+        "H2" => Some(2),
+        "H3" => Some(3),
+        "H4" => Some(4),
+        "H5" => Some(5),
+        "H6" => Some(6),
+        _ => None,
+    }
 }
 
 pub struct ClassifierConfig {
@@ -73,7 +86,20 @@ impl Classifier {
     }
 
     /// Classify all blocks on a page, returning `Block`s with `BlockKind` assigned.
+    #[allow(dead_code)]
     pub fn classify_page(&self, raw_blocks: Vec<RawTextBlock>, page: &RawPage) -> Vec<Block> {
+        self.classify_page_with_metadata(raw_blocks, page, None)
+    }
+
+    /// Classify a page with an optional `PageMetadata` sidecar providing
+    /// font-weight and struct-tree signals. When `metadata` is `None`, this
+    /// is equivalent to [`classify_page`].
+    pub fn classify_page_with_metadata(
+        &self,
+        raw_blocks: Vec<RawTextBlock>,
+        page: &RawPage,
+        metadata: Option<&PageMetadata>,
+    ) -> Vec<Block> {
         // First pass: detect table cells (pass body font size for heading exclusion)
         let table_cells = detect_table_cells_with_font_size(&raw_blocks, self.config.body_font_size);
 
@@ -83,7 +109,7 @@ impl Classifier {
                 let kind = if let Some(tc) = table_cells.get(&rb.block_id) {
                     tc.clone()
                 } else {
-                    self.classify_block(&rb, page)
+                    self.classify_block_with_metadata(&rb, page, metadata)
                 };
                 Block {
                     id: rb.block_id,
@@ -99,7 +125,17 @@ impl Classifier {
             .collect()
     }
 
+    #[allow(dead_code)]
     fn classify_block(&self, block: &RawTextBlock, page: &RawPage) -> BlockKind {
+        self.classify_block_with_metadata(block, page, None)
+    }
+
+    fn classify_block_with_metadata(
+        &self,
+        block: &RawTextBlock,
+        page: &RawPage,
+        metadata: Option<&PageMetadata>,
+    ) -> BlockKind {
         let text = block.text.trim();
 
         if text.is_empty() {
@@ -145,11 +181,32 @@ impl Classifier {
             return BlockKind::ListItem { ordered: false, depth };
         }
 
-        // Heading detection — font size based
+        // Heading detection — prefer struct-tree role, then font-size ratio,
+        // then bold-at-body-size as a last resort when metadata is present.
+        if let Some(md) = metadata {
+            if let Some(role) = md.struct_role_for_bbox(&block.bbox) {
+                if let Some(level) = struct_role_to_heading_level(role) {
+                    return BlockKind::Heading { level };
+                }
+            }
+        }
+
         let ratio = block.font_size / self.config.body_font_size;
         if ratio >= self.config.heading_size_ratio {
             let level = self.font_size_to_heading_level(block.font_size);
             return BlockKind::Heading { level };
+        }
+
+        // Bold-at-body-size heading signal — only when metadata is available.
+        // A short, bold, non-sentence-terminated line at body font size is
+        // almost always a subsection heading in documents that don't use
+        // size hierarchy.
+        if let Some(md) = metadata {
+            if let Some(font) = md.font_for_bbox(&block.bbox) {
+                if font.is_bold() && text.len() <= 120 && !text.ends_with('.') {
+                    return BlockKind::Heading { level: 4 };
+                }
+            }
         }
 
         // Short, single-line text at larger-ish size (section headers with same body size)
@@ -782,5 +839,156 @@ mod tests {
         // Heading and caption should not be table cells
         assert!(!cells.contains_key(&0), "Heading should not be a table cell");
         assert!(!cells.contains_key(&1), "Caption should not be a table cell");
+    }
+
+    // ========================================================================
+    // Metadata-aware classification (Phase 3)
+    // ========================================================================
+
+    use crate::pdf::metadata::{FontInfo, PageMetadata, StructTag};
+
+    fn classifier_with_body(size: f32) -> Classifier {
+        Classifier::with_config(ClassifierConfig {
+            body_font_size: size,
+            ..Default::default()
+        })
+    }
+
+    fn page_for_classifier_tests() -> RawPage {
+        RawPage {
+            page_num: 0,
+            width: 612.0,
+            height: 792.0,
+            blocks: Vec::new(),
+            image_refs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn metadata_none_is_identical_to_classify_block() {
+        let clf = classifier_with_body(10.0);
+        let page = page_for_classifier_tests();
+        let block = make_block(100.0, 100.0, 500.0, 115.0, "A section header at 11pt", 11.0);
+
+        let without = clf.classify_block(&block, &page);
+        let with_none = clf.classify_block_with_metadata(&block, &page, None);
+        assert_eq!(without, with_none);
+    }
+
+    #[test]
+    fn bold_at_body_size_becomes_heading_with_metadata() {
+        let clf = classifier_with_body(10.0);
+        let page = page_for_classifier_tests();
+        // Body-size (10pt) short line — ordinarily a Paragraph.
+        let block = make_block(100.0, 100.0, 500.0, 112.0, "Methods", 10.0);
+
+        let without_md = clf.classify_block_with_metadata(&block, &page, None);
+        assert_eq!(
+            without_md,
+            BlockKind::Paragraph,
+            "no metadata → stays paragraph"
+        );
+
+        // Now with metadata saying that bbox is bold (weight 700).
+        let mut md = PageMetadata::default();
+        md.fonts.push((
+            block.bbox,
+            FontInfo {
+                family: "Helvetica-Bold".to_string(),
+                weight: 700,
+                italic: false,
+            },
+        ));
+
+        let with_md = clf.classify_block_with_metadata(&block, &page, Some(&md));
+        assert_eq!(with_md, BlockKind::Heading { level: 4 });
+    }
+
+    #[test]
+    fn bold_long_sentence_is_not_heading() {
+        let clf = classifier_with_body(10.0);
+        let page = page_for_classifier_tests();
+        // Bold long paragraph-ish — ends with period. Don't upgrade.
+        let block = make_block(
+            100.0,
+            100.0,
+            500.0,
+            115.0,
+            "This is a perfectly ordinary paragraph written in bold because the author enjoys emphasis, and it ends with a sentence-terminating period.",
+            10.0,
+        );
+        let mut md = PageMetadata::default();
+        md.fonts.push((
+            block.bbox,
+            FontInfo {
+                family: "Times-Bold".to_string(),
+                weight: 700,
+                italic: false,
+            },
+        ));
+        assert_eq!(
+            clf.classify_block_with_metadata(&block, &page, Some(&md)),
+            BlockKind::Paragraph,
+            "bold running prose is not a heading"
+        );
+    }
+
+    #[test]
+    fn struct_tree_role_h2_wins_over_size_ratio() {
+        let clf = classifier_with_body(10.0);
+        let page = page_for_classifier_tests();
+        // Same-size-as-body block — not a heading by size.
+        let block = make_block(100.0, 100.0, 500.0, 115.0, "Background", 10.0);
+
+        let mut md = PageMetadata::default();
+        md.struct_tags.push(StructTag {
+            bbox: block.bbox,
+            role: "H2".to_string(),
+            alt: None,
+        });
+
+        assert_eq!(
+            clf.classify_block_with_metadata(&block, &page, Some(&md)),
+            BlockKind::Heading { level: 2 }
+        );
+    }
+
+    #[test]
+    fn struct_tree_title_maps_to_h1() {
+        let clf = classifier_with_body(10.0);
+        let page = page_for_classifier_tests();
+        let block = make_block(100.0, 100.0, 500.0, 115.0, "My Thesis", 10.0);
+
+        let mut md = PageMetadata::default();
+        md.struct_tags.push(StructTag {
+            bbox: block.bbox,
+            role: "Title".to_string(),
+            alt: None,
+        });
+
+        assert_eq!(
+            clf.classify_block_with_metadata(&block, &page, Some(&md)),
+            BlockKind::Heading { level: 1 }
+        );
+    }
+
+    #[test]
+    fn unknown_struct_role_falls_through_to_size_detection() {
+        let clf = classifier_with_body(10.0);
+        let page = page_for_classifier_tests();
+        let block = make_block(100.0, 100.0, 500.0, 115.0, "Some text", 10.0);
+
+        let mut md = PageMetadata::default();
+        md.struct_tags.push(StructTag {
+            bbox: block.bbox,
+            role: "NonsenseRole".to_string(),
+            alt: None,
+        });
+
+        // Should fall through — size is body, so Paragraph.
+        assert_eq!(
+            clf.classify_block_with_metadata(&block, &page, Some(&md)),
+            BlockKind::Paragraph
+        );
     }
 }

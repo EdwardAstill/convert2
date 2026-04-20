@@ -40,6 +40,7 @@ pub fn extract(path: &Path) -> VtvResult<Document> {
             width: 960.0,  // standard 10" slide at 96dpi
             height: 540.0, // 16:9 aspect
             blocks,
+            override_markdown: None,
         });
     }
 

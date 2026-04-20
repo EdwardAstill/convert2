@@ -34,6 +34,22 @@ zip = "8.5.1"
 quick-xml = "0.39.2"
 scraper = "0.26.0"
 resvg = "0.47.0"
+# Docling hybrid backend (optional runtime, `--hybrid docling`)
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
+# Second-opinion PDF reader for font names + struct-tree access.
+# Gated behind `pdfium-metadata` feature because it dynamically loads
+# `libpdfium.so`/`pdfium.dll` at runtime and is not needed for the
+# default build. See docs/architecture.md § "pdfium metadata feature".
+pdfium-render = { version = "0.9", default-features = false, features = ["thread_safe", "pdfium_latest"], optional = true }
+
+[features]
+default = []
+# Opt-in font-name + struct-tree metadata via pdfium-render. Needs
+# `libpdfium` installed at runtime; see README for setup.
+pdfium-metadata = ["dep:pdfium-render"]
+
+[dev-dependencies]
+httpmock = "0.7"
 
 [profile.release]
 opt-level = 3

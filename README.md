@@ -1,6 +1,6 @@
 # cnv (convert2)
 
-`cnv` converts PDF documents into AI-friendly markdown structures. It is a single self-contained binary with no runtime dependencies on Java, Python, or a GPU. All processing happens locally. Given a PDF file (or a directory or glob of files), `cnv` extracts text with bounding boxes via MuPDF, reconstructs reading order using an XY-Cut++ algorithm, classifies blocks into headings, lists, tables, captions, and body text, then writes one of four output formats suited to different downstream uses: raw markdown, RAG-ready chunks, a Karpathy-style wiki folder, or a JSON knowledge graph.
+`cnv` converts PDF documents into AI-friendly markdown structures. It is a single self-contained binary with no runtime dependencies on Java, Python, or a GPU. All processing happens locally by default. Given a PDF file (or a directory or glob of files), `cnv` extracts text with bounding boxes via MuPDF, reconstructs reading order using an XY-Cut++ algorithm, classifies blocks into headings, lists, tables, captions, and body text, then writes one of five output formats suited to different downstream uses: raw markdown, RAG-ready chunks, a Karpathy-style wiki folder, a JSON knowledge graph, or a structured document-model JSON. An optional `--hybrid docling` mode routes the whole PDF to a running [`docling-serve`](https://github.com/docling-project/docling-serve) daemon for LaTeX-quality equations, full-table reconstruction, and OCR on scanned pages.
 
 ---
 
@@ -59,12 +59,15 @@ cnv <INPUT> [OPTIONS]
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-f`, `--format <FORMAT>` | `raw` | Output format: `raw`, `rag`, `karpathy`, `kg` |
+| `-f`, `--format <FORMAT>` | `raw` | Output format: `raw`, `rag`, `karpathy`, `kg`, `json` |
 | `-o`, `--output <DIR>` | next to input | Output directory |
 | `--chunk-size <N>` | `500` | Target chunk size in approximate tokens (`rag` format only) |
 | `--min-h-gap <pts>` | `8.0` | Minimum vertical gap for horizontal cuts (XY-Cut tuning) |
 | `--min-v-gap <pts>` | `12.0` | Minimum horizontal gap for vertical cuts (XY-Cut tuning) |
 | `--no-images` | off | Skip image extraction |
+| `--hybrid <MODE>` | `off` | Route PDFs through an external backend: `off` or `docling` |
+| `--hybrid-url <URL>` | `http://localhost:5001` | Base URL of the hybrid backend |
+| `--hybrid-timeout-secs <N>` | `600` | Timeout for the hybrid backend call |
 | `-v`, `--verbose` | off | Print per-file progress to stderr |
 | `--version` | | Print version |
 
@@ -82,6 +85,12 @@ cnv paper.pdf -f karpathy -o wiki/
 
 # Knowledge graph
 cnv paper.pdf -f kg -o graph/
+
+# Structured JSON (bboxes, items, types)
+cnv paper.pdf -f json -o data/
+
+# Hybrid mode — delegate to a running docling-serve for LaTeX math + OCR
+cnv math-paper.pdf --hybrid docling -o out/
 
 # Batch: all PDFs in a directory, verbose
 cnv docs/ -f raw -o out/ --verbose
@@ -208,23 +217,62 @@ Example structure:
 }
 ```
 
+### `json`
+
+A structured export of the document model — one JSON file per document, with per-page items carrying bounding boxes, typed content, and stable identifiers. Useful as input to programmatic pipelines that want more structure than flat markdown.
+
+```
+out/
+  paper.json
+```
+
+Shape:
+
+```json
+{
+  "source": { "path": "paper.pdf", "pages": 11 },
+  "metadata": { "title": "...", "author": "...", "subject": null, "page_count": 11 },
+  "pages": [
+    {
+      "page_no": 1,
+      "width": 612.0, "height": 792.0,
+      "items": [
+        { "id": "p1-b0", "type": "section_header", "level": 1, "text": "Attention Is All You Need", "bbox": [...] },
+        { "id": "p1-b1", "type": "paragraph", "text": "...", "bbox": [...] },
+        { "id": "p1-b5", "type": "picture", "path": "images/page1_img1.png", "bbox": [...] }
+      ]
+    }
+  ]
+}
+```
+
+Item types: `section_header`, `paragraph`, `list_item`, `table_cell`, `caption`, `code_block`, `page_number`, `running_header`, `running_footer`, `picture`, `figure`, `formula`. The schema is a subset of the Docling / OpenDataLoader document model.
+
 ---
 
 ## XY-Cut++ algorithm
 
 Reading order recovery is non-trivial for PDFs because the file format stores text blocks in drawing order, not reading order. On a two-column page, MuPDF may return blocks interleaved between columns.
 
-`cnv` implements a variant of the XY-Cut algorithm. For a given set of blocks, the algorithm finds the largest horizontal whitespace gap (a gap between rows of blocks) and the largest vertical whitespace gap (a gap between columns). If a vertical gap is more than 20% larger than the best horizontal gap, the page is split vertically first — correctly isolating the left column from the right before any paragraph-level splitting happens. Otherwise the horizontal cut is taken, which preserves natural top-to-bottom reading order within a column. The process recurses on each sub-region until no gap exceeds the configured minimum (8 pt horizontal, 12 pt vertical by default). An in-order traversal of the resulting binary tree gives the reading sequence.
+`cnv` ports the OpenDataLoader XY-Cut++ implementation (Apache-2.0, Hancom) to Rust. The algorithm has four phases: (1) pre-mask cross-layout elements such as full-width titles and spanning headers so they do not perturb column detection; (2) compute a density ratio for future axis-tiebreaking; (3) recursively segment by finding the largest whitespace gap on each axis, preferring the axis with the larger gap and falling back to a narrow-outlier retry when a bridging element obscures a column gap; (4) merge the pre-masked cross-layout elements back into the ordered stream by Y position.
 
 The `--min-h-gap` and `--min-v-gap` flags let you tune the sensitivity. Raising `--min-v-gap` is useful for documents with narrow column gutters; lowering `--min-h-gap` helps when paragraph spacing is tight.
 
 ---
 
+## Hybrid mode (`--hybrid docling`)
+
+For higher-quality output on math-heavy, table-heavy, or scanned PDFs, `cnv` can delegate the entire conversion to a running [`docling-serve`](https://github.com/docling-project/docling-serve) instance. This is opt-in and requires the user to have docling-serve running (typically as a Docker container on `localhost:5001`). When hybrid mode is on, the local MuPDF pipeline is skipped and the returned markdown is used verbatim; this produces better LaTeX formulas, proper tables, and OCR on scanned pages, at the cost of losing the local image-extraction step.
+
+See `docs/architecture.md` for the architecture and `docs/plans/2026-04-20-opendataloader-parity.md` for the roadmap of what's landed and what's still to come. See `docs/TESTING.md` for the full test layout, including the two unverified paths that need a live `docling-serve` and a local `libpdfium` respectively.
+
+---
+
 ## Limitations
 
-- **Scanned PDFs produce no text.** If a PDF contains only rasterised page images (a common result of scanning physical documents), MuPDF returns no text blocks and `cnv` will produce an empty or near-empty output. OCR is not performed.
+- **Scanned PDFs produce no text in the default local pipeline.** If a PDF contains only rasterised page images, MuPDF returns no text blocks and the local path produces an empty or near-empty output. OCR is not performed locally — use `--hybrid docling` to route the file through Docling's OCR pipeline.
 
-- **Heading detection uses font size only.** The MuPDF 0.6 Rust wrapper does not expose per-character font names, so bold or small-caps body text at the body size cannot be distinguished from a normal paragraph. All heading detection is based on the font-size ratio relative to the document body size mode.
+- **Heading detection uses font size only in the default build.** The MuPDF 0.6 Rust wrapper does not expose per-character font names, so bold or small-caps body text at the body size cannot be distinguished from a normal paragraph. All heading detection is based on the font-size ratio relative to the document body size mode. Build with `--features pdfium-metadata` to add a second-opinion PDF reader (pdfium-render) that surfaces font weight and struct-tree tags; the classifier then uses those for heading detection too. The feature flag requires `libpdfium` to be installed at runtime.
 
 - **Batch processing is sequential.** MuPDF's C library is not safe to call from multiple threads concurrently. Processing multiple PDFs runs one file at a time rather than in parallel. The `rayon` dependency is present for potential future use within a single document but is not currently applied across files.
 

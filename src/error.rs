@@ -52,6 +52,9 @@ pub enum VtvError {
 
     #[error("Unsupported conversion: {0}")]
     UnsupportedConversion(String),
+
+    #[error("Hybrid backend ({url}) failed: {message}")]
+    HybridBackend { url: String, message: String },
 }
 
 /// Convenience result type for vtv operations.

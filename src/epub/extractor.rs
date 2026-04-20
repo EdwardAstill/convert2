@@ -52,6 +52,7 @@ pub fn extract(path: &Path) -> VtvResult<Document> {
                 width: 612.0,
                 height: 792.0,
                 blocks,
+                override_markdown: None,
             });
         }
     }

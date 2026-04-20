@@ -65,6 +65,14 @@ impl MarkdownRenderer {
         // Emit a page boundary marker (1-indexed, invisible when rendered)
         md.push_str(&format!("<!-- page:{} -->\n", page.page_num + 1));
 
+        // Hybrid override: if this page was routed through the external
+        // backend, emit its markdown verbatim and skip the block-based render.
+        if let Some(override_md) = &page.override_markdown {
+            md.push_str(override_md.trim_end());
+            md.push_str("\n\n");
+            return Ok((md, images));
+        }
+
         // Warn if page has no extractable text (scanned image or empty page)
         if page.blocks.is_empty() {
             md.push_str(&format!(
@@ -140,6 +148,25 @@ impl MarkdownRenderer {
                 BlockKind::Image { path } => {
                     if let Some(p) = path {
                         md.push_str(&format!("![image]({})\n\n", p));
+                    }
+                    i += 1;
+                }
+                BlockKind::Figure { path, caption } => {
+                    if let Some(p) = path {
+                        md.push_str(&format!("![image]({})\n\n", p));
+                    }
+                    if let Some(c) = caption {
+                        md.push('*');
+                        md.push_str(c.trim());
+                        md.push_str("*\n\n");
+                    }
+                    i += 1;
+                }
+                BlockKind::Formula { latex, display } => {
+                    if *display {
+                        md.push_str(&format!("$$ {} $$\n\n", latex.trim()));
+                    } else {
+                        md.push_str(&format!("${}$\n\n", latex.trim()));
                     }
                     i += 1;
                 }
@@ -231,7 +258,7 @@ fn render_table(blocks: &[&Block]) -> String {
 
 /// Split markdown into sections using heading boundaries.
 /// Falls back to a single section if no headings are found.
-fn split_into_sections(markdown: &str, doc: &Document) -> Vec<Section> {
+pub fn split_into_sections(markdown: &str, doc: &Document) -> Vec<Section> {
     let mut sections: Vec<Section> = Vec::new();
     let mut current_title = String::from("Document");
     let mut current_level = 1u8;
@@ -359,6 +386,7 @@ mod tests {
                 make_block(0, "Introduction", BlockKind::Heading { level: 1 }, 0),
                 make_block(1, "Hello world.", BlockKind::Paragraph, 1),
             ],
+            override_markdown: None,
         };
         let doc = make_doc(vec![page]);
         let renderer = MarkdownRenderer::new(false, None);
@@ -378,6 +406,7 @@ mod tests {
                 make_block(1, "Chapter 1", BlockKind::RunningHeader, 1),
                 make_block(2, "Body text.", BlockKind::Paragraph, 2),
             ],
+            override_markdown: None,
         };
         let doc = make_doc(vec![page]);
         let renderer = MarkdownRenderer::new(false, None);
@@ -398,6 +427,7 @@ mod tests {
                 make_block(2, "Methods", BlockKind::Heading { level: 2 }, 2),
                 make_block(3, "We did things.", BlockKind::Paragraph, 3),
             ],
+            override_markdown: None,
         };
         let doc = make_doc(vec![page]);
         let renderer = MarkdownRenderer::new(false, None);
@@ -429,6 +459,7 @@ mod tests {
                     1,
                 ),
             ],
+            override_markdown: None,
         };
         let doc = make_doc(vec![page]);
         let renderer = MarkdownRenderer::new(false, None);
@@ -449,6 +480,7 @@ mod tests {
                 make_block(2, "Alice", BlockKind::TableCell { row: 1, col: 0 }, 2),
                 make_block(3, "30", BlockKind::TableCell { row: 1, col: 1 }, 3),
             ],
+            override_markdown: None,
         };
         let doc = make_doc(vec![page]);
         let renderer = MarkdownRenderer::new(false, None);
@@ -480,6 +512,7 @@ mod tests {
             width: 595.0,
             height: 842.0,
             blocks: vec![],
+            override_markdown: None,
         };
         let doc = make_doc(vec![page]);
         let renderer = MarkdownRenderer::new(false, None);
@@ -502,6 +535,7 @@ mod tests {
             blocks: vec![
                 make_block(0, "Some text", BlockKind::Paragraph, 0),
             ],
+            override_markdown: None,
         };
         let doc = make_doc(vec![page]);
         let renderer = MarkdownRenderer::new(false, None);

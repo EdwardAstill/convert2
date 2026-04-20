@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use mupdf::{Document, MetadataName, TextPageFlags};
+use mupdf::{Document, ImageFormat, MetadataName, TextPageFlags};
 use mupdf::text_page::TextBlockType;
 
 use crate::document::types::{Bbox, DocumentMetadata, ImageRef, RawPage, RawTextBlock};
@@ -145,12 +145,26 @@ impl PdfExtractor {
                 }
                 TextBlockType::Image => {
                     let bbox = Self::mupdf_rect_to_bbox(block.bounds());
-                    image_refs.push(ImageRef {
-                        page_num,
-                        bbox,
-                        image_index,
-                    });
-                    image_index += 1;
+                    // Decode the image block's pixmap to PNG bytes. Silently skip
+                    // on any failure — an unreadable image is strictly better to
+                    // drop than to panic the whole extraction.
+                    if let Some(image) = block.image() {
+                        if let Ok(pixmap) = image.to_pixmap() {
+                            let mut bytes: Vec<u8> = Vec::new();
+                            if pixmap.write_to(&mut bytes, ImageFormat::PNG).is_ok()
+                                && !bytes.is_empty()
+                            {
+                                image_refs.push(ImageRef {
+                                    page_num,
+                                    bbox,
+                                    image_index,
+                                    bytes,
+                                    format: "png".to_string(),
+                                });
+                                image_index += 1;
+                            }
+                        }
+                    }
                 }
                 // Ignore Struct, Vector, Grid block types
                 _ => {}

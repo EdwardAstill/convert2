@@ -5,3 +5,11 @@ __pycache__/
 .venv/
 /target/
 Cargo.lock
+
+# Session-local Claude scheduler state
+.claude/
+
+# Downloaded test-corpus PDFs — regenerate with scripts/fetch-papers.sh.
+# arXiv papers have mixed redistribution licenses; OpenDataLoader goldens
+# should be copied manually. The golden tests skip missing fixtures.
+/papers/
