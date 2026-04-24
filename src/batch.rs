@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
-use glob::glob;
 use crate::cli::SUPPORTED_EXTENSIONS;
 use crate::error::{VtvError, VtvResult};
+use glob::glob;
+use std::path::{Path, PathBuf};
 
 /// Check if a file has a supported extension.
 fn is_supported(path: &Path) -> bool {
@@ -11,7 +11,7 @@ fn is_supported(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Resolve the input string to a list of file paths with supported extensions.
+/// Resolve the input string to a list of PDF paths.
 pub fn resolve_inputs(input: &str) -> VtvResult<Vec<PathBuf>> {
     let path = Path::new(input);
 
@@ -30,7 +30,7 @@ pub fn resolve_inputs(input: &str) -> VtvResult<Vec<PathBuf>> {
         }
     }
 
-    // Directory — find all supported files
+    // Directory — find all PDFs
     if path.is_dir() {
         let mut files: Vec<PathBuf> = Vec::new();
         for entry in std::fs::read_dir(path).map_err(|e| VtvError::Io {

@@ -1,34 +1,40 @@
 <!-- page:1 -->
-# arXiv:1706.03762v7  [cs.CL]  2 Aug 2023
+# Attention Is All You Need
 
-#### Provided proper attribution is provided, Google hereby grants permission to
-reproduce the tables and figures in this paper solely for use in journalistic or
-scholarly works.
+arXiv:1706.03762v7  [cs.CL]  2 Aug 2023
 
-## Attention Is All You Need
-
-| Ashish Vaswani^{∗}
+Ashish Vaswani^{∗}
 Google Brain
-avaswani@google.com | Noam Shazeer^{∗}
+avaswani@google.com
+
+Noam Shazeer^{∗}
 Google Brain
-noam@google.com | Niki Parmar^{∗}
+noam@google.com
+
+Niki Parmar^{∗}
 Google Research
-nikip@google.com |  | Jakob Uszkoreit^{∗}
+nikip@google.com
+
+Jakob Uszkoreit^{∗}
 Google Research
-usz@google.com |
-| --- | --- | --- | --- | --- |
-| Llion Jones^{∗}
+usz@google.com
+
+Llion Jones^{∗}
 Google Research
-llion@google.com | Aidan N. Gomez^{∗}^{†}
+llion@google.com
+
+Aidan N. Gomez^{∗}^{†}
 University of Toronto
-aidan@cs.toronto.edu |  | Łukasz Kaiser^{∗}
+aidan@cs.toronto.edu
+
+Łukasz Kaiser^{∗}
 Google Brain
-lukaszkaiser@google.com |  |
+lukaszkaiser@google.com
 
 Illia Polosukhin^{∗}^{‡}
 illia.polosukhin@gmail.com
 
-#### Abstract
+## Abstract
 
 The dominant sequence transduction models are based on complex recurrent or
 convolutional neural networks that include an encoder and a decoder. The best
@@ -45,6 +51,10 @@ training for 3.5 days on eight GPUs, a small fraction of the training costs of t
 best models from the literature. We show that the Transformer generalizes well to
 other tasks by applying it successfully to English constituency parsing both with
 large and limited training data.
+
+Provided proper attribution is provided, Google hereby grants permission to
+reproduce the tables and figures in this paper solely for use in journalistic or
+scholarly works.
 
 ^{∗}Equal contribution. Listing order is random. Jakob proposed replacing RNNs with self-attention and started
 the effort to evaluate this idea. Ashish, with Illia, designed and implemented the first Transformer models and

@@ -2,6 +2,8 @@
 
 What is tested, how to run the tests, and which paths remain unverified.
 
+Active scope note: the main `cnv` binary is now PDF-to-markdown only. Legacy multi-format work lives under `legacy/`.
+
 ## Automated tests (`cargo test`)
 
 | Layer | Command | Count | Runtime |
@@ -36,7 +38,6 @@ cargo check --features pdfium-metadata
 - **Metadata lookup** — 6 tests in `src/pdf/metadata.rs::tests` covering overlap scoring, bbox matching, and the stub loader.
 - **PDF extraction subscript/superscript logic** — 20+ tests in `src/pdf/extractor.rs::tests` exercising classify_char_script, group_into_text_rows, and real-world traces from AISC-360.
 - **Markdown renderer** — tests in `src/render/markdown.rs::tests` covering heading/paragraph/list/table emission, section splitting, scanned-page warnings, and the Phase 2b `override_markdown` path (implicitly via hybrid integration tests).
-- **LaTeX→Typst translator** — 20+ unit tests in `src/typst/latex2typst.rs::tests` across Greek, big operators, matrices, frac, scripts, aligned environments, etc.
 - **Hybrid triage** — 8 unit tests in `src/hybrid/triage.rs::tests` covering math-density threshold, table detection, low-density detection, and the fact that running-footer text is excluded from the math count.
 - **Hybrid client parsing** — 5 unit tests on `ConvertResponse` deserialisation, all documented fallback keys (`md_content`, `content_md`, nested under `document`).
 - **Hybrid end-to-end** (via `httpmock` in `tests/hybrid.rs`) — three scenarios:

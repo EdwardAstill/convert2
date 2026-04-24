@@ -114,18 +114,12 @@ fn bbox_overlap_score(a: &Bbox, b: &Bbox) -> f32 {
 // ============================================================================
 
 #[cfg(not(feature = "pdfium-metadata"))]
-pub fn load_page_metadata(
-    _pdf: &std::path::Path,
-    _page_num: usize,
-) -> Option<PageMetadata> {
+pub fn load_page_metadata(_pdf: &std::path::Path, _page_num: usize) -> Option<PageMetadata> {
     None
 }
 
 #[cfg(feature = "pdfium-metadata")]
-pub fn load_page_metadata(
-    pdf: &std::path::Path,
-    page_num: usize,
-) -> Option<PageMetadata> {
+pub fn load_page_metadata(pdf: &std::path::Path, page_num: usize) -> Option<PageMetadata> {
     match pdfium_impl::load(pdf, page_num) {
         Ok(md) => Some(md),
         Err(e) => {
@@ -170,14 +164,13 @@ mod pdfium_impl {
         }
     }
 
-    pub fn load(
-        pdf: &std::path::Path,
-        page_num: usize,
-    ) -> Result<PageMetadata, String> {
-        let bindings = Pdfium::bind_to_system_library()
-            .map_err(|e| format!("bind_to_system_library: {e}"))?;
+    pub fn load(pdf: &std::path::Path, page_num: usize) -> Result<PageMetadata, String> {
+        let bindings =
+            Pdfium::bind_to_system_library().map_err(|e| format!("bind_to_system_library: {e}"))?;
         let pdfium = Pdfium::new(bindings);
-        let path_str = pdf.to_str().ok_or_else(|| "non-utf8 PDF path".to_string())?;
+        let path_str = pdf
+            .to_str()
+            .ok_or_else(|| "non-utf8 PDF path".to_string())?;
         let doc = pdfium
             .load_pdf_from_file(path_str, None)
             .map_err(|e| format!("load_pdf_from_file: {e}"))?;
@@ -211,7 +204,11 @@ mod pdfium_impl {
 
             md.fonts.push((
                 Bbox::new(l, y0, r, y1),
-                FontInfo { family, weight, italic },
+                FontInfo {
+                    family,
+                    weight,
+                    italic,
+                },
             ));
         }
 
@@ -228,7 +225,11 @@ mod tests {
     use super::*;
 
     fn font(family: &str, weight: u16, italic: bool) -> FontInfo {
-        FontInfo { family: family.to_string(), weight, italic }
+        FontInfo {
+            family: family.to_string(),
+            weight,
+            italic,
+        }
     }
 
     #[test]
@@ -248,8 +249,12 @@ mod tests {
     #[test]
     fn font_for_bbox_picks_the_containing_run() {
         let mut md = PageMetadata::default();
-        md.fonts.push((Bbox::new(0.0, 0.0, 100.0, 20.0), font("Times", 400, false)));
-        md.fonts.push((Bbox::new(0.0, 30.0, 100.0, 50.0), font("Helvetica-Bold", 700, false)));
+        md.fonts
+            .push((Bbox::new(0.0, 0.0, 100.0, 20.0), font("Times", 400, false)));
+        md.fonts.push((
+            Bbox::new(0.0, 30.0, 100.0, 50.0),
+            font("Helvetica-Bold", 700, false),
+        ));
 
         let heading_bbox = Bbox::new(0.0, 30.0, 100.0, 50.0);
         let chosen = md.font_for_bbox(&heading_bbox).unwrap();
@@ -260,7 +265,8 @@ mod tests {
     #[test]
     fn font_for_bbox_ignores_non_overlapping() {
         let mut md = PageMetadata::default();
-        md.fonts.push((Bbox::new(0.0, 0.0, 100.0, 20.0), font("Times", 400, false)));
+        md.fonts
+            .push((Bbox::new(0.0, 0.0, 100.0, 20.0), font("Times", 400, false)));
         let faraway = Bbox::new(500.0, 500.0, 600.0, 520.0);
         assert!(md.font_for_bbox(&faraway).is_none());
     }
@@ -273,7 +279,10 @@ mod tests {
             role: "H1".to_string(),
             alt: None,
         });
-        assert_eq!(md.struct_role_for_bbox(&Bbox::new(0.0, 0.0, 100.0, 20.0)), Some("H1"));
+        assert_eq!(
+            md.struct_role_for_bbox(&Bbox::new(0.0, 0.0, 100.0, 20.0)),
+            Some("H1")
+        );
         // Tiny sliver overlap — below 0.5 threshold.
         assert!(md
             .struct_role_for_bbox(&Bbox::new(90.0, 0.0, 200.0, 20.0))

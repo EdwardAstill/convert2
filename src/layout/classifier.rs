@@ -1,7 +1,7 @@
-use regex::Regex;
-use std::sync::OnceLock;
 use crate::document::types::{Block, BlockKind, RawPage, RawTextBlock};
 use crate::pdf::metadata::PageMetadata;
+use regex::Regex;
+use std::sync::OnceLock;
 
 // --- Regex patterns (compiled once) ---
 
@@ -23,14 +23,58 @@ fn unordered_list_re() -> &'static Regex {
 fn caption_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)^\s*(figure|fig\.?|table|tbl\.?|algorithm|listing|exhibit)\s+[\dIVXivx]+[.:)]").unwrap()
+        Regex::new(
+            r"(?i)^\s*(figure|fig\.?|table|tbl\.?|algorithm|listing|exhibit)\s+[\dIVXivx]+[.:)]",
+        )
+        .unwrap()
     })
 }
 
 fn code_block_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // Heuristic: starts with common code patterns
-    RE.get_or_init(|| Regex::new(r"^\s*(```|~~~|def |fn |pub |class |import |from |#include|int |void |return )").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"^\s*(```|~~~|def |fn |pub |class |import |from |#include|int |void |return )")
+            .unwrap()
+    })
+}
+
+fn scholarly_metadata_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)^\s*(arxiv:\S+|doi:\S+|https?://doi\.org/\S+|preprint\b|accepted at\b|published as\b)",
+        )
+        .unwrap()
+    })
+}
+
+fn scholarly_note_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)(permission to make digital|all rights reserved|copyright held by|acm isbn|provided proper attribution|correspondence to:)",
+        )
+        .unwrap()
+    })
+}
+
+fn affiliation_keyword_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(university|institute|department|school|college|laborator(?:y|ies)|research|openai|google|microsoft|meta|deepmind|anthropic|inc\.?|corp\.?|llc|san francisco|california|toronto|eth zurich)\b",
+        )
+        .unwrap()
+    })
+}
+
+fn numeric_cell_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^\s*\(?-?(?:\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{2})?|\d+(?:[.,]\d{2})|\d+)\)?\s*$")
+            .unwrap()
+    })
 }
 
 fn struct_role_to_heading_level(role: &str) -> Option<u8> {
@@ -101,7 +145,8 @@ impl Classifier {
         metadata: Option<&PageMetadata>,
     ) -> Vec<Block> {
         // First pass: detect table cells (pass body font size for heading exclusion)
-        let table_cells = detect_table_cells_with_font_size(&raw_blocks, self.config.body_font_size);
+        let table_cells =
+            detect_table_cells_with_font_size(&raw_blocks, self.config.body_font_size);
 
         raw_blocks
             .into_iter()
@@ -174,11 +219,23 @@ impl Classifier {
         // List items
         if ordered_list_re().is_match(text) {
             let depth = indent_depth(block, page);
-            return BlockKind::ListItem { ordered: true, depth };
+            return BlockKind::ListItem {
+                ordered: true,
+                depth,
+            };
         }
         if unordered_list_re().is_match(text) {
             let depth = indent_depth(block, page);
-            return BlockKind::ListItem { ordered: false, depth };
+            return BlockKind::ListItem {
+                ordered: false,
+                depth,
+            };
+        }
+
+        // Scholarly metadata and permission/copyright notes frequently use
+        // large fonts on page 1, but should not be promoted to headings.
+        if scholarly_metadata_re().is_match(text) || scholarly_note_re().is_match(text) {
+            return BlockKind::Paragraph;
         }
 
         // Heading detection — prefer struct-tree role, then font-size ratio,
@@ -212,7 +269,8 @@ impl Classifier {
         // Short, single-line text at larger-ish size (section headers with same body size)
         // Heuristic: <= 80 chars, no trailing period, all-caps or title-case dominant
         // Only apply if we couldn't detect via size — weak signal, be conservative
-        if text.len() <= 80 && !text.ends_with('.') && is_likely_heading_text(text) && ratio >= 0.99 {
+        if text.len() <= 80 && !text.ends_with('.') && is_likely_heading_text(text) && ratio >= 0.99
+        {
             // Skip for now to avoid false positives
         }
 
@@ -316,12 +374,18 @@ fn is_non_table_block(block: &RawTextBlock, body_font_size: f32) -> bool {
     }
 
     // Page numbers
-    if page_number_re().is_match(text) {
+    if page_number_re().is_match(text) && block.bbox.width() < 40.0 && text.len() <= 6 {
         return true;
     }
 
     // List items
     if ordered_list_re().is_match(text) || unordered_list_re().is_match(text) {
+        return true;
+    }
+
+    // Author / affiliation blocks on scholarly first pages are often arranged
+    // in a visual grid, but rendering them as markdown tables reads poorly.
+    if looks_like_author_affiliation_block(text) {
         return true;
     }
 
@@ -337,6 +401,78 @@ fn is_non_table_block(block: &RawTextBlock, body_font_size: f32) -> bool {
     }
 
     false
+}
+
+fn looks_like_author_affiliation_block(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    if trimmed.contains('@') || affiliation_keyword_re().is_match(trimmed) {
+        return true;
+    }
+
+    let non_empty_lines: Vec<&str> = trimmed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if non_empty_lines.len() >= 2 {
+        return looks_like_author_name_line(non_empty_lines[0]);
+    }
+
+    false
+}
+
+fn looks_like_author_name_line(text: &str) -> bool {
+    let words: Vec<&str> = text
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';'))
+        .filter(|word| !word.is_empty())
+        .collect();
+    if !(2..=12).contains(&words.len()) {
+        return false;
+    }
+
+    let stopwords = [
+        "a", "an", "and", "are", "as", "at", "by", "for", "from", "in", "is", "of", "on", "or",
+        "the", "to", "with",
+    ];
+
+    let capitalized = words
+        .iter()
+        .filter(|word| {
+            word.chars()
+                .find(|c| c.is_alphabetic())
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false)
+        })
+        .count();
+    let stopword_count = words
+        .iter()
+        .filter(|word| stopwords.contains(&word.to_ascii_lowercase().as_str()))
+        .count();
+    let lowercase_content_words = words
+        .iter()
+        .filter(|word| {
+            let lower = word.to_ascii_lowercase();
+            !stopwords.contains(&lower.as_str())
+                && word
+                    .chars()
+                    .find(|c| c.is_alphabetic())
+                    .map(|c| c.is_lowercase())
+                    .unwrap_or(false)
+        })
+        .count();
+
+    capitalized * 5 >= words.len() * 4 && stopword_count == 0 && lowercase_content_words == 0
+}
+
+fn table_column_anchor(block: &RawTextBlock) -> f32 {
+    if numeric_cell_re().is_match(block.text.trim()) {
+        block.bbox.x1
+    } else {
+        block.bbox.x0
+    }
 }
 
 /// Detect table cells by finding blocks arranged in a 2D grid.
@@ -400,7 +536,12 @@ fn find_table_regions<'a>(blocks: &[&'a RawTextBlock]) -> Vec<Vec<&'a RawTextBlo
 
     // Sort by y0 (top edge)
     let mut sorted: Vec<&RawTextBlock> = blocks.to_vec();
-    sorted.sort_by(|a, b| a.bbox.y0.partial_cmp(&b.bbox.y0).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        a.bbox
+            .y0
+            .partial_cmp(&b.bbox.y0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Cluster y-positions into rows
     let y_positions: Vec<f32> = sorted.iter().map(|b| b.bbox.y0).collect();
@@ -476,8 +617,9 @@ fn detect_table_in_region(region: &[&RawTextBlock]) -> std::collections::HashMap
 
     let mut result = HashMap::new();
 
-    // Cluster x-positions (left edges) into columns with tighter tolerance
-    let x_positions: Vec<f32> = region.iter().map(|b| b.bbox.x0).collect();
+    // Numeric columns are often right-aligned, so use the right edge for
+    // numeric-looking cells and the left edge everywhere else.
+    let x_positions: Vec<f32> = region.iter().map(|b| table_column_anchor(b)).collect();
     let x_clusters = cluster_positions(&x_positions, 12.0);
 
     // Cluster y-positions (top edges) into rows
@@ -497,7 +639,7 @@ fn detect_table_in_region(region: &[&RawTextBlock]) -> std::collections::HashMap
     // Assign each block to a (row, col) if it aligns to cluster centres,
     // keyed by block_id for stability against reordering.
     for block in region.iter() {
-        let col = nearest_cluster(block.bbox.x0, &x_clusters, 12.0);
+        let col = nearest_cluster(table_column_anchor(block), &x_clusters, 12.0);
         let row = nearest_cluster(block.bbox.y0, &y_clusters, 6.0);
         if let (Some(col), Some(row)) = (col, row) {
             result.insert(block.block_id, BlockKind::TableCell { row, col });
@@ -609,7 +751,15 @@ mod tests {
         make_block_id(x0, y0, x1, y1, text, font_size, 0)
     }
 
-    fn make_block_id(x0: f32, y0: f32, x1: f32, y1: f32, text: &str, font_size: f32, block_id: usize) -> RawTextBlock {
+    fn make_block_id(
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        text: &str,
+        font_size: f32,
+        block_id: usize,
+    ) -> RawTextBlock {
         RawTextBlock {
             bbox: Bbox::new(x0, y0, x1, y1),
             text: text.to_string(),
@@ -639,7 +789,14 @@ mod tests {
     fn paragraph_at_body_size() {
         let page = make_page(600.0, 800.0, vec![]);
         let clf = Classifier::with_config(ClassifierConfig::default());
-        let block = make_block(50.0, 200.0, 550.0, 215.0, "This is a normal paragraph.", 10.0);
+        let block = make_block(
+            50.0,
+            200.0,
+            550.0,
+            215.0,
+            "This is a normal paragraph.",
+            10.0,
+        );
         assert_eq!(clf.classify_block(&block, &page), BlockKind::Paragraph);
     }
 
@@ -705,7 +862,13 @@ mod tests {
             page_num: 0,
             width: 600.0,
             height: 800.0,
-            blocks: vec![block(12.0), block(12.0), block(12.0), block(18.0), block(24.0)],
+            blocks: vec![
+                block(12.0),
+                block(12.0),
+                block(12.0),
+                block(18.0),
+                block(24.0),
+            ],
             image_refs: vec![],
         }];
         assert_eq!(compute_body_font_size(&pages), 12.0);
@@ -721,7 +884,9 @@ mod tests {
         ];
         let cells = detect_table_cells(&blocks);
         assert_eq!(cells.len(), 4);
-        assert!(cells.values().all(|k| matches!(k, BlockKind::TableCell { .. })));
+        assert!(cells
+            .values()
+            .all(|k| matches!(k, BlockKind::TableCell { .. })));
     }
 
     #[test]
@@ -735,43 +900,127 @@ mod tests {
         let mut id = 0;
 
         // Title: "TABLE E1.1 Selection Table" — large font (heading)
-        blocks.push(make_block_id(50.0, 30.0, 500.0, 55.0, "TABLE E1.1 Selection Table for Application", 14.0, id));
+        blocks.push(make_block_id(
+            50.0,
+            30.0,
+            500.0,
+            55.0,
+            "TABLE E1.1 Selection Table for Application",
+            14.0,
+            id,
+        ));
         id += 1;
 
         // Table header row (3 columns)
-        blocks.push(make_block_id(50.0, 80.0, 180.0, 100.0, "Cross Section", 10.0, id));
+        blocks.push(make_block_id(
+            50.0,
+            80.0,
+            180.0,
+            100.0,
+            "Cross Section",
+            10.0,
+            id,
+        ));
         id += 1;
-        blocks.push(make_block_id(200.0, 80.0, 350.0, 100.0, "Limit State", 10.0, id));
+        blocks.push(make_block_id(
+            200.0,
+            80.0,
+            350.0,
+            100.0,
+            "Limit State",
+            10.0,
+            id,
+        ));
         id += 1;
-        blocks.push(make_block_id(370.0, 80.0, 520.0, 100.0, "Reference", 10.0, id));
+        blocks.push(make_block_id(
+            370.0,
+            80.0,
+            520.0,
+            100.0,
+            "Reference",
+            10.0,
+            id,
+        ));
         id += 1;
 
         // Data row 1
-        blocks.push(make_block_id(50.0, 110.0, 180.0, 130.0, "W-shape", 10.0, id));
+        blocks.push(make_block_id(
+            50.0, 110.0, 180.0, 130.0, "W-shape", 10.0, id,
+        ));
         id += 1;
-        blocks.push(make_block_id(200.0, 110.0, 350.0, 130.0, "Flexural Yielding", 10.0, id));
+        blocks.push(make_block_id(
+            200.0,
+            110.0,
+            350.0,
+            130.0,
+            "Flexural Yielding",
+            10.0,
+            id,
+        ));
         id += 1;
-        blocks.push(make_block_id(370.0, 110.0, 520.0, 130.0, "Section F2", 10.0, id));
+        blocks.push(make_block_id(
+            370.0,
+            110.0,
+            520.0,
+            130.0,
+            "Section F2",
+            10.0,
+            id,
+        ));
         id += 1;
 
         // Data row 2
-        blocks.push(make_block_id(50.0, 140.0, 180.0, 160.0, "Channel", 10.0, id));
+        blocks.push(make_block_id(
+            50.0, 140.0, 180.0, 160.0, "Channel", 10.0, id,
+        ));
         id += 1;
         blocks.push(make_block_id(200.0, 140.0, 350.0, 160.0, "LTB", 10.0, id));
         id += 1;
-        blocks.push(make_block_id(370.0, 140.0, 520.0, 160.0, "Section F3", 10.0, id));
+        blocks.push(make_block_id(
+            370.0,
+            140.0,
+            520.0,
+            160.0,
+            "Section F3",
+            10.0,
+            id,
+        ));
         id += 1;
 
         // Data row 3
         blocks.push(make_block_id(50.0, 170.0, 180.0, 190.0, "HSS", 10.0, id));
         id += 1;
-        blocks.push(make_block_id(200.0, 170.0, 350.0, 190.0, "Local Buckling", 10.0, id));
+        blocks.push(make_block_id(
+            200.0,
+            170.0,
+            350.0,
+            190.0,
+            "Local Buckling",
+            10.0,
+            id,
+        ));
         id += 1;
-        blocks.push(make_block_id(370.0, 170.0, 520.0, 190.0, "Section F7", 10.0, id));
+        blocks.push(make_block_id(
+            370.0,
+            170.0,
+            520.0,
+            190.0,
+            "Section F7",
+            10.0,
+            id,
+        ));
         id += 1;
 
         // Notes below table
-        blocks.push(make_block_id(50.0, 210.0, 520.0, 240.0, "User Note: See Commentary for further discussion.", 10.0, id));
+        blocks.push(make_block_id(
+            50.0,
+            210.0,
+            520.0,
+            240.0,
+            "User Note: See Commentary for further discussion.",
+            10.0,
+            id,
+        ));
 
         // Use body_font_size=10.0 so the 14pt title is detected as heading and excluded
         let cells = detect_table_cells_with_font_size(&blocks, 10.0);
@@ -783,7 +1032,9 @@ mod tests {
             cells.len(),
             cells
         );
-        assert!(cells.values().all(|k| matches!(k, BlockKind::TableCell { .. })));
+        assert!(cells
+            .values()
+            .all(|k| matches!(k, BlockKind::TableCell { .. })));
 
         // Title (id=0) and notes (id=13) should NOT be in the table
         assert!(!cells.contains_key(&0), "Title should not be a table cell");
@@ -803,8 +1054,13 @@ mod tests {
                 let x0 = 50.0 + col as f32 * 100.0;
                 let y0 = 100.0 + row as f32 * 80.0;
                 blocks.push(make_block_id(
-                    x0, y0, x0 + 80.0, y0 + 20.0,
-                    &format!("R{}C{}", row, col), 10.0, id,
+                    x0,
+                    y0,
+                    x0 + 80.0,
+                    y0 + 20.0,
+                    &format!("R{}C{}", row, col),
+                    10.0,
+                    id,
                 ));
                 id += 1;
             }
@@ -813,7 +1069,8 @@ mod tests {
         let cells = detect_table_cells(&blocks);
         assert!(
             cells.len() >= 40,
-            "Full-page table should be detected, got {} cells", cells.len()
+            "Full-page table should be detected, got {} cells",
+            cells.len()
         );
     }
 
@@ -824,7 +1081,15 @@ mod tests {
             // Heading (large font)
             make_block_id(50.0, 30.0, 400.0, 55.0, "CHAPTER 5", 18.0, 0),
             // Caption
-            make_block_id(50.0, 60.0, 400.0, 75.0, "Table 5.1: Material Properties", 10.0, 1),
+            make_block_id(
+                50.0,
+                60.0,
+                400.0,
+                75.0,
+                "Table 5.1: Material Properties",
+                10.0,
+                1,
+            ),
             // 2x2 table
             make_block_id(50.0, 100.0, 180.0, 120.0, "Steel", 10.0, 2),
             make_block_id(200.0, 100.0, 350.0, 120.0, "Fy = 50 ksi", 10.0, 3),
@@ -837,8 +1102,40 @@ mod tests {
         // Table cells should be detected (ids 2-5)
         assert_eq!(cells.len(), 4, "Should detect 4 table cells");
         // Heading and caption should not be table cells
-        assert!(!cells.contains_key(&0), "Heading should not be a table cell");
-        assert!(!cells.contains_key(&1), "Caption should not be a table cell");
+        assert!(
+            !cells.contains_key(&0),
+            "Heading should not be a table cell"
+        );
+        assert!(
+            !cells.contains_key(&1),
+            "Caption should not be a table cell"
+        );
+    }
+
+    #[test]
+    fn table_detection_handles_right_aligned_numeric_columns() {
+        let blocks = vec![
+            make_block_id(40.0, 80.0, 220.0, 100.0, "Line item", 10.0, 0),
+            make_block_id(290.0, 80.0, 360.0, 100.0, "2024", 10.0, 1),
+            make_block_id(380.0, 80.0, 450.0, 100.0, "2023", 10.0, 2),
+            make_block_id(40.0, 112.0, 220.0, 132.0, "Revenue", 10.0, 3),
+            make_block_id(315.0, 112.0, 360.0, 132.0, "120.062.000", 10.0, 4),
+            make_block_id(405.0, 112.0, 450.0, 132.0, "124.406.000", 10.0, 5),
+            make_block_id(40.0, 144.0, 220.0, 164.0, "EBITDA", 10.0, 6),
+            make_block_id(322.0, 144.0, 360.0, 164.0, "8.509.000", 10.0, 7),
+            make_block_id(412.0, 144.0, 450.0, 164.0, "10.808.000", 10.0, 8),
+        ];
+
+        let cells = detect_table_cells_with_font_size(&blocks, 10.0);
+        assert_eq!(cells.len(), 9, "all right-aligned cells should be kept");
+
+        let row0_cols: Vec<usize> = (0..=2)
+            .map(|id| match cells.get(&id) {
+                Some(BlockKind::TableCell { col, .. }) => *col,
+                other => panic!("expected table cell for id {id}, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(row0_cols, vec![0, 1, 2]);
     }
 
     // ========================================================================
@@ -873,6 +1170,66 @@ mod tests {
         let without = clf.classify_block(&block, &page);
         let with_none = clf.classify_block_with_metadata(&block, &page, None);
         assert_eq!(without, with_none);
+    }
+
+    #[test]
+    fn scholarly_metadata_does_not_become_heading() {
+        let clf = classifier_with_body(10.0);
+        let page = page_for_classifier_tests();
+        let block = make_block(
+            100.0,
+            100.0,
+            500.0,
+            120.0,
+            "arXiv:1706.03762v7  [cs.CL]  2 Aug 2023",
+            16.0,
+        );
+
+        assert_eq!(
+            clf.classify_block(&block, &page),
+            BlockKind::Paragraph,
+            "scholarly metadata should stay paragraph even at large font size"
+        );
+    }
+
+    #[test]
+    fn author_cells_with_emails_are_not_table_cells() {
+        let blocks = vec![
+            make_block_id(
+                50.0,
+                80.0,
+                220.0,
+                140.0,
+                "Ashish Vaswani\nGoogle Brain\navaswani@google.com",
+                10.0,
+                0,
+            ),
+            make_block_id(
+                260.0,
+                80.0,
+                430.0,
+                140.0,
+                "Noam Shazeer\nGoogle Brain\nnoam@google.com",
+                10.0,
+                1,
+            ),
+            make_block_id(50.0, 160.0, 430.0, 180.0, "Abstract", 12.0, 2),
+            make_block_id(
+                50.0,
+                200.0,
+                430.0,
+                220.0,
+                "The Transformer replaces recurrence with attention.",
+                10.0,
+                3,
+            ),
+        ];
+
+        let cells = detect_table_cells_with_font_size(&blocks, 10.0);
+        assert!(
+            cells.is_empty(),
+            "author contact blocks should not be classified as markdown tables"
+        );
     }
 
     #[test]

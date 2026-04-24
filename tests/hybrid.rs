@@ -131,9 +131,68 @@ fn hybrid_docling_logs_backend_errors_and_keeps_local_output() {
 
     // Local path ran for lorem → we still got a non-empty markdown file.
     let md_path = out_dir.join("lorem/lorem.md");
-    assert!(md_path.exists(), "local output should exist despite backend failure");
+    assert!(
+        md_path.exists(),
+        "local output should exist despite backend failure"
+    );
     let content = std::fs::read_to_string(&md_path).unwrap();
-    assert!(!content.trim().is_empty(), "local fallback content should be non-empty");
+    assert!(
+        !content.trim().is_empty(),
+        "local fallback content should be non-empty"
+    );
+
+    mock.assert_hits(1);
+}
+
+#[test]
+fn hybrid_auto_routes_scan_like_document_to_mock_backend() {
+    let server = MockServer::start();
+    let canned = "# OCR markdown from mock backend\n\nRecovered text.\n";
+
+    let mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/convert/file");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(format!(
+                "{{\"document\": {{\"md_content\": {}}}}}",
+                serde_json::to_string(canned).unwrap()
+            ));
+    });
+
+    let root = project_root();
+    let pdf = root.join("papers/golden/chinese_scan.pdf");
+    if !pdf.exists() {
+        eprintln!("SKIP: fixture missing {}", pdf.display());
+        return;
+    }
+
+    let out_dir = root.join("target/hybrid-scan-auto");
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let output = Command::new(bin_path())
+        .arg(&pdf)
+        .arg("-o")
+        .arg(&out_dir)
+        .arg("--hybrid")
+        .arg("docling")
+        .arg("--hybrid-url")
+        .arg(server.base_url())
+        .output()
+        .expect("failed to invoke cnv");
+
+    assert!(
+        output.status.success(),
+        "cnv --hybrid docling failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let md_path = out_dir.join("chinese_scan/chinese_scan.md");
+    assert!(md_path.exists(), "expected output at {}", md_path.display());
+    let content = std::fs::read_to_string(&md_path).unwrap();
+    assert!(
+        content.contains("OCR markdown from mock backend"),
+        "expected backend markdown for scan-like document, got:\n{content}"
+    );
 
     mock.assert_hits(1);
 }
@@ -160,14 +219,14 @@ fn hybrid_off_produces_same_output_as_before_phase_2() {
         // --hybrid defaults to off; assert by omission.
         .output()
         .expect("failed to invoke cnv");
-    assert!(output.status.success(), "cnv failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "cnv failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let md = std::fs::read_to_string(out_dir.join("attention/attention.md")).unwrap();
-    let page_1 = md
-        .split("<!-- page:2 -->")
-        .next()
-        .unwrap_or("")
-        .trim_end();
+    let page_1 = md.split("<!-- page:2 -->").next().unwrap_or("").trim_end();
 
     let snap = std::fs::read_to_string(root.join("tests/snapshots/attention_page_1.md"))
         .expect("Phase 1 snapshot should exist");
@@ -182,8 +241,7 @@ fn hybrid_off_produces_same_output_as_before_phase_2() {
 #[ignore = "requires a running docling-serve at $DOCLING_URL (default http://localhost:5001). \
             Run with: DOCLING_URL=http://localhost:5001 cargo test --test hybrid -- --ignored hybrid_live"]
 fn hybrid_live() {
-    let url = std::env::var("DOCLING_URL")
-        .unwrap_or_else(|_| "http://localhost:5001".to_string());
+    let url = std::env::var("DOCLING_URL").unwrap_or_else(|_| "http://localhost:5001".to_string());
 
     let root = project_root();
     let pdf = root.join("papers/math-number-theory.pdf");
@@ -222,4 +280,3 @@ fn hybrid_live() {
         "expected at least one LaTeX math delimiter in Docling output for a math paper"
     );
 }
-

@@ -45,6 +45,26 @@ pub const MATH_SYMBOL_THRESHOLD: usize = 4;
 /// text blocks ends up below this.
 const MIN_TEXT_AREA_FRACTION: f32 = 0.02;
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ScanReport {
+    pub pages_total: usize,
+    pub pages_with_readable_text: usize,
+    pub image_only_pages: usize,
+    pub low_density_pages: usize,
+}
+
+impl ScanReport {
+    pub fn likely_scan_like(self) -> bool {
+        if self.pages_total == 0 {
+            return false;
+        }
+        if self.image_only_pages == self.pages_total {
+            return true;
+        }
+        self.pages_with_readable_text == 0 && self.low_density_pages > 0
+    }
+}
+
 /// Should this page be routed through the hybrid backend?
 pub fn should_route(page: &Page) -> bool {
     has_table(page) || is_math_heavy(page) || is_low_density(page)
@@ -84,6 +104,39 @@ pub fn is_low_density(page: &Page) -> bool {
     (text_area / page_area) < MIN_TEXT_AREA_FRACTION
 }
 
+pub fn has_readable_text(page: &Page) -> bool {
+    page.blocks.iter().any(block_counts_as_readable_text)
+}
+
+pub fn is_image_only(page: &Page) -> bool {
+    !page.blocks.is_empty()
+        && page
+            .blocks
+            .iter()
+            .all(|b| matches!(b.kind, BlockKind::Image { .. } | BlockKind::Figure { .. }))
+}
+
+pub fn scan_report(pages: &[Page]) -> ScanReport {
+    let mut report = ScanReport {
+        pages_total: pages.len(),
+        ..Default::default()
+    };
+
+    for page in pages {
+        if has_readable_text(page) {
+            report.pages_with_readable_text += 1;
+        }
+        if is_image_only(page) {
+            report.image_only_pages += 1;
+        }
+        if is_low_density(page) {
+            report.low_density_pages += 1;
+        }
+    }
+
+    report
+}
+
 fn count_math_chars(blocks: &[Block]) -> usize {
     blocks
         .iter()
@@ -100,6 +153,27 @@ fn count_math_chars(blocks: &[Block]) -> usize {
         .flat_map(|b| b.text.chars())
         .filter(|c| is_math_char(*c))
         .count()
+}
+
+fn block_counts_as_readable_text(block: &Block) -> bool {
+    match &block.kind {
+        BlockKind::Paragraph
+        | BlockKind::Heading { .. }
+        | BlockKind::ListItem { .. }
+        | BlockKind::TableCell { .. }
+        | BlockKind::Caption
+        | BlockKind::CodeBlock
+        | BlockKind::Formula { .. } => {
+            !block.text.trim().is_empty() || matches!(block.kind, BlockKind::Formula { .. })
+        }
+        BlockKind::Figure { caption, .. } => {
+            caption.as_deref().is_some_and(|c| !c.trim().is_empty())
+        }
+        BlockKind::PageNumber
+        | BlockKind::RunningHeader
+        | BlockKind::RunningFooter
+        | BlockKind::Image { .. } => false,
+    }
 }
 
 #[cfg(test)]
@@ -151,7 +225,11 @@ mod tests {
                     mathematical symbols, just ordinary sentences. The \
                     content is descriptive and expository.";
         let p = page(
-            vec![block(BlockKind::Paragraph, text, Bbox::new(0.0, 0.0, 500.0, 200.0))],
+            vec![block(
+                BlockKind::Paragraph,
+                text,
+                Bbox::new(0.0, 0.0, 500.0, 200.0),
+            )],
             612.0,
             792.0,
         );
@@ -194,7 +272,11 @@ mod tests {
     fn nearly_empty_page_is_low_density() {
         // Page with only a page-number at the bottom — likely a scan
         let p = page(
-            vec![block(BlockKind::PageNumber, "3", Bbox::new(280.0, 780.0, 320.0, 790.0))],
+            vec![block(
+                BlockKind::PageNumber,
+                "3",
+                Bbox::new(280.0, 780.0, 320.0, 790.0),
+            )],
             612.0,
             792.0,
         );
@@ -218,6 +300,71 @@ mod tests {
             792.0,
         );
         assert!(is_low_density(&p));
+    }
+
+    #[test]
+    fn image_only_page_is_not_readable_text() {
+        let p = page(
+            vec![block(
+                BlockKind::Image {
+                    path: Some("images/img.png".to_string()),
+                },
+                "",
+                Bbox::new(0.0, 0.0, 600.0, 400.0),
+            )],
+            612.0,
+            792.0,
+        );
+        assert!(is_image_only(&p));
+        assert!(!has_readable_text(&p));
+    }
+
+    #[test]
+    fn scan_report_flags_fully_image_only_document() {
+        let pages = vec![
+            page(
+                vec![block(
+                    BlockKind::Image {
+                        path: Some("images/p1.png".to_string()),
+                    },
+                    "",
+                    Bbox::new(0.0, 0.0, 500.0, 700.0),
+                )],
+                612.0,
+                792.0,
+            ),
+            page(
+                vec![block(
+                    BlockKind::Image {
+                        path: Some("images/p2.png".to_string()),
+                    },
+                    "",
+                    Bbox::new(0.0, 0.0, 500.0, 700.0),
+                )],
+                612.0,
+                792.0,
+            ),
+        ];
+        let report = scan_report(&pages);
+        assert_eq!(report.image_only_pages, 2);
+        assert_eq!(report.pages_with_readable_text, 0);
+        assert!(report.likely_scan_like());
+    }
+
+    #[test]
+    fn scan_report_does_not_flag_normal_prose_document() {
+        let pages = vec![page(
+            vec![block(
+                BlockKind::Paragraph,
+                "Readable prose on a normal page.",
+                Bbox::new(0.0, 0.0, 500.0, 300.0),
+            )],
+            612.0,
+            792.0,
+        )];
+        let report = scan_report(&pages);
+        assert_eq!(report.pages_with_readable_text, 1);
+        assert!(!report.likely_scan_like());
     }
 
     #[test]

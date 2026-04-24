@@ -72,6 +72,29 @@ fn stem(pdf: &Path) -> String {
     pdf.file_stem().unwrap().to_string_lossy().into_owned()
 }
 
+fn read_markdown(out_dir: &Path, pdf: &Path) -> String {
+    let s = stem(pdf);
+    std::fs::read_to_string(out_dir.join(&s).join(format!("{s}.md")))
+        .unwrap_or_else(|err| panic!("failed to read markdown for {}: {err}", pdf.display()))
+}
+
+fn page_slice(markdown: &str, page_num: usize) -> &str {
+    let start_marker = format!("<!-- page:{page_num} -->");
+    let end_marker = format!("<!-- page:{} -->", page_num + 1);
+    let start = markdown
+        .find(&start_marker)
+        .unwrap_or_else(|| panic!("missing page marker {start_marker}"));
+    let end = markdown[start + start_marker.len()..]
+        .find(&end_marker)
+        .map(|idx| start + start_marker.len() + idx)
+        .unwrap_or(markdown.len());
+    &markdown[start..end]
+}
+
+fn exact_line_count(markdown: &str, needle: &str) -> usize {
+    markdown.lines().filter(|line| *line == needle).count()
+}
+
 #[test]
 fn golden_lorem_quick() {
     let root = project_root();
@@ -94,12 +117,118 @@ fn golden_lorem_quick() {
     );
 
     let md_path = out.join("lorem/lorem.md");
-    assert!(md_path.exists(), "expected markdown at {}", md_path.display());
+    assert!(
+        md_path.exists(),
+        "expected markdown at {}",
+        md_path.display()
+    );
 
     let content = std::fs::read_to_string(&md_path).unwrap();
     assert!(
         !content.trim().is_empty(),
         "lorem.md is empty — something is wrong in the happy path"
+    );
+}
+
+#[test]
+fn golden_scan_like_pdf_warns_about_hybrid() {
+    let root = project_root();
+    let pdf = root.join("papers/golden/chinese_scan.pdf");
+    if !pdf.exists() {
+        eprintln!(
+            "SKIP golden_scan_like_pdf_warns_about_hybrid: no {}",
+            pdf.display()
+        );
+        return;
+    }
+
+    let out = root.join("target/golden-out-scan-warning");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+
+    let result = run_cnv(&pdf, &out);
+    assert!(
+        result.status.success(),
+        "cnv failed on chinese_scan.pdf: exit {:?}, stderr:\n{}",
+        result.status.code(),
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("scan-heavy") && stderr.contains("--hybrid docling"),
+        "expected scan warning with hybrid hint, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn golden_presentation_suppresses_repeated_page_furniture() {
+    let root = project_root();
+    let pdf =
+        root.join("papers/golden/pdfua-1-reference-suite-1-1/PDFUA-Ref-2-04_Presentation.pdf");
+    if !pdf.exists() {
+        eprintln!(
+            "SKIP golden_presentation_suppresses_repeated_page_furniture: no {}",
+            pdf.display()
+        );
+        return;
+    }
+
+    let out = root.join("target/golden-out-presentation-furniture");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+
+    let result = run_cnv(&pdf, &out);
+    assert!(
+        result.status.success(),
+        "cnv failed on presentation fixture: exit {:?}, stderr:\n{}",
+        result.status.code(),
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let markdown = read_markdown(&out, &pdf);
+    assert_eq!(
+        exact_line_count(&markdown, "www.pdfa.org"),
+        1,
+        "expected repeated header URL to be kept at most once:\n{markdown}"
+    );
+    assert_eq!(
+        exact_line_count(&markdown, "Klaas Posselt,"),
+        1,
+        "expected repeated speaker footer to be kept at most once:\n{markdown}"
+    );
+}
+
+#[test]
+fn golden_magazine_caps_decorative_images_on_front_page() {
+    let root = project_root();
+    let pdf =
+        root.join("papers/golden/pdfua-1-reference-suite-1-1/PDFUA-Ref-2-01_Magazine-danish.pdf");
+    if !pdf.exists() {
+        eprintln!(
+            "SKIP golden_magazine_caps_decorative_images_on_front_page: no {}",
+            pdf.display()
+        );
+        return;
+    }
+
+    let out = root.join("target/golden-out-magazine-front-page");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+
+    let result = run_cnv(&pdf, &out);
+    assert!(
+        result.status.success(),
+        "cnv failed on magazine fixture: exit {:?}, stderr:\n{}",
+        result.status.code(),
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let markdown = read_markdown(&out, &pdf);
+    let first_page = page_slice(&markdown, 1);
+    assert!(
+        first_page.matches("![image]").count() <= 2,
+        "expected decorative image cap on magazine front page, got:\n{first_page}"
     );
 }
 
@@ -167,7 +296,11 @@ fn golden_corpus_sweep() {
     }
 
     if !skipped.is_empty() {
-        eprintln!("skipped {} missing fixture(s): {:?}", skipped.len(), skipped);
+        eprintln!(
+            "skipped {} missing fixture(s): {:?}",
+            skipped.len(),
+            skipped
+        );
     }
 
     if !failures.is_empty() {
@@ -241,4 +374,86 @@ fn golden_snapshot_attention_page_1() {
             actual_path.display()
         );
     }
+}
+
+#[test]
+#[ignore = "requires example fixtures; exercises invoice/form structure rendering"]
+fn golden_snapshot_invoice_and_form_structure() {
+    let root = project_root();
+    let invoice_pdf =
+        root.join("example/pdf/golden__pdfua-1-reference-suite-1-1__PDFUA-Ref-2-02_Invoice.pdf");
+    let form_pdf =
+        root.join("example/pdf/golden__pdfua-1-reference-suite-1-1__PDFUA-Ref-2-10_Form.pdf");
+    if !invoice_pdf.exists() || !form_pdf.exists() {
+        eprintln!(
+            "SKIP golden_snapshot_invoice_and_form_structure: missing fixture(s) invoice={} form={}",
+            invoice_pdf.display(),
+            form_pdf.display()
+        );
+        return;
+    }
+
+    let out = root.join("target/golden-out-structured-business");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+
+    for pdf in [&invoice_pdf, &form_pdf] {
+        let result = run_cnv(pdf, &out);
+        assert!(
+            result.status.success(),
+            "cnv failed on {}: {}",
+            pdf.display(),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    let invoice_md = std::fs::read_to_string(
+        out.join("golden__pdfua-1-reference-suite-1-1__PDFUA-Ref-2-02_Invoice")
+            .join("golden__pdfua-1-reference-suite-1-1__PDFUA-Ref-2-02_Invoice.md"),
+    )
+    .expect("invoice markdown should exist");
+    assert!(invoice_md.contains("| Item | Quantity | Price | Amount |"));
+    assert!(invoice_md.contains("Total:"));
+
+    let form_md = std::fs::read_to_string(
+        out.join("golden__pdfua-1-reference-suite-1-1__PDFUA-Ref-2-10_Form")
+            .join("golden__pdfua-1-reference-suite-1-1__PDFUA-Ref-2-10_Form.md"),
+    )
+    .expect("form markdown should exist");
+    assert!(form_md.contains("- Check boxes:"));
+    assert!(form_md.contains("- Radio buttons:"));
+}
+
+#[test]
+#[ignore = "requires example fixture; exercises financial table reconstruction"]
+fn golden_snapshot_financial_statement_structure() {
+    let root = project_root();
+    let pdf = root.join("example/pdf/golden__issue-336-conto-economico-bialetti.pdf");
+    if !pdf.exists() {
+        eprintln!(
+            "SKIP golden_snapshot_financial_statement_structure: no {}",
+            pdf.display()
+        );
+        return;
+    }
+
+    let out = root.join("target/golden-out-financial-structure");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+
+    let result = run_cnv(&pdf, &out);
+    assert!(
+        result.status.success(),
+        "cnv failed on {}: {}",
+        pdf.display(),
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let md = std::fs::read_to_string(
+        out.join("golden__issue-336-conto-economico-bialetti")
+            .join("golden__issue-336-conto-economico-bialetti.md"),
+    )
+    .expect("financial markdown should exist");
+    assert!(md.contains("| Item | Value 1 | Value 2 | Value 3 | Value 4 |"));
+    assert!(md.contains("| 1) Ricavi delle vendite e delle prestazioni |"));
 }

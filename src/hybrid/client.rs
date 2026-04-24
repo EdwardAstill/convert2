@@ -42,11 +42,7 @@ impl DoclingClient {
     /// Upload in-memory PDF bytes to docling-serve and return the response's
     /// `md_content`. Used by per-page routing where the bytes come from a
     /// single-page PDF extracted in memory.
-    pub fn convert_bytes_to_markdown(
-        &self,
-        bytes: Vec<u8>,
-        filename: &str,
-    ) -> VtvResult<String> {
+    pub fn convert_bytes_to_markdown(&self, bytes: Vec<u8>, filename: &str) -> VtvResult<String> {
         let endpoint = format!("{}/v1/convert/file", self.base_url);
         let part = multipart::Part::bytes(bytes)
             .file_name(filename.to_string())
@@ -83,16 +79,17 @@ impl DoclingClient {
             });
         }
 
-        let parsed: ConvertResponse =
-            response.json().map_err(|e| VtvError::HybridBackend {
-                url: endpoint.to_string(),
-                message: format!("response was not valid JSON: {e}"),
-            })?;
-
-        let md = parsed.extract_markdown().ok_or_else(|| VtvError::HybridBackend {
+        let parsed: ConvertResponse = response.json().map_err(|e| VtvError::HybridBackend {
             url: endpoint.to_string(),
-            message: "response contained no markdown content".to_string(),
+            message: format!("response was not valid JSON: {e}"),
         })?;
+
+        let md = parsed
+            .extract_markdown()
+            .ok_or_else(|| VtvError::HybridBackend {
+                url: endpoint.to_string(),
+                message: "response contained no markdown content".to_string(),
+            })?;
         if md.trim().is_empty() {
             return Err(VtvError::HybridBackend {
                 url: self.base_url.clone(),

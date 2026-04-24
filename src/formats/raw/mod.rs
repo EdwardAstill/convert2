@@ -1,8 +1,8 @@
-use std::fs;
-use std::path::Path;
 use crate::document::types::Document;
 use crate::error::{VtvError, VtvResult};
 use crate::render::markdown::RenderedDocument;
+use std::fs;
+use std::path::Path;
 
 pub struct RawFormat;
 

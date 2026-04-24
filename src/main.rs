@@ -1,30 +1,24 @@
 mod batch;
 mod cli;
-mod docx;
 mod document;
-mod epub;
 mod error;
 mod formats;
-mod html_extract;
 mod hybrid;
 mod layout;
 mod pdf;
-mod pptx;
 mod render;
-mod svg;
-mod typst;
 
 use anyhow::Context;
 use clap::Parser;
 
-use cli::{Cli, Format, InputType};
+use cli::{Cli, InputType};
+use document::types::{Block, BlockKind, Document, ImageRef, Page};
 use layout::{
     classifier::Classifier,
-    xycut::{XyCutConfig, assign_reading_order, build_xycut_order},
+    xycut::{assign_reading_order, build_xycut_order, XyCutConfig},
 };
 use pdf::extractor::PdfExtractor;
 use render::markdown::MarkdownRenderer;
-use document::types::{Block, BlockKind, Document, ImageRef, Page};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -33,15 +27,12 @@ fn main() -> anyhow::Result<()> {
         .with_context(|| format!("Failed to resolve input '{}'", cli.input))?;
 
     if cli.verbose {
-        eprintln!("Processing {} file(s)", inputs.len());
+        eprintln!("Processing {} PDF file(s)", inputs.len());
     }
 
     let results: Vec<(std::path::PathBuf, anyhow::Result<()>)> = inputs
         .iter()
-        .map(|path| {
-            let result = process_one(path, &cli);
-            (path.clone(), result)
-        })
+        .map(|path| (path.clone(), process_one(path, &cli)))
         .collect();
 
     let mut had_errors = false;
@@ -66,41 +57,16 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Route a single file to the appropriate conversion pipeline.
-fn process_one(
-    path: &std::path::Path,
-    cli: &Cli,
-) -> anyhow::Result<()> {
+fn process_one(path: &std::path::Path, cli: &Cli) -> anyhow::Result<()> {
     let input_type = InputType::from_path(path)
         .ok_or_else(|| anyhow::anyhow!("Unsupported file type: {}", path.display()))?;
 
-    let format = cli.format.clone().unwrap_or_else(|| input_type.default_format());
-
-    if !input_type.supports_format(&format) {
-        anyhow::bail!(
-            "Format {:?} is not supported for {:?} files",
-            format,
-            input_type
-        );
-    }
-
     match input_type {
-        InputType::Pdf => process_pdf(path, cli, &format),
-        InputType::Docx => process_docx(path, cli, &format),
-        InputType::Epub => process_epub(path, cli, &format),
-        InputType::Pptx => process_pptx(path, cli, &format),
-        InputType::Html => process_html(path, cli, &format),
-        InputType::Markdown => process_md_to_typst(path, cli),
-        InputType::Svg => process_svg_to_png(path, cli),
+        InputType::Pdf => process_pdf(path, cli),
     }
 }
 
-/// Pipeline A: PDF → Document → Markdown → Format writer
-fn process_pdf(
-    pdf_path: &std::path::Path,
-    cli: &Cli,
-    format: &Format,
-) -> anyhow::Result<()> {
+fn process_pdf(pdf_path: &std::path::Path, cli: &Cli) -> anyhow::Result<()> {
     if cli.verbose {
         eprintln!("  processing PDF: {}", pdf_path.display());
     }
@@ -111,21 +77,15 @@ fn process_pdf(
         ..Default::default()
     };
 
-    // Extract raw pages and metadata in a single file open
     let (raw_pages, metadata) = PdfExtractor::extract(pdf_path)
         .with_context(|| format!("Failed to extract {}", pdf_path.display()))?;
 
-    // Build classifier from document-level font size stats
     let classifier = Classifier::new_for_document(&raw_pages);
 
-    // Images are saved to `<output_dir>/images/` and referenced from the
-    // markdown via the relative path `images/<file>`. The output dir is also
-    // re-derived in write_document() — `batch::output_dir_for` is pure.
     let output_dir = batch::output_dir_for(pdf_path, cli.output.as_deref());
     let images_dir = output_dir.join("images");
     let extract_images = !cli.no_images;
 
-    // Process each page: XY-Cut++ on text → classify → save image bytes → merge.
     let pages: Vec<Page> = raw_pages
         .into_iter()
         .map(|raw_page| -> anyhow::Result<Page> {
@@ -142,11 +102,8 @@ fn process_pdf(
                 image_refs: Vec::new(),
             };
             let metadata = pdf::metadata::load_page_metadata(pdf_path, raw_page.page_num);
-            let text_classified = classifier.classify_page_with_metadata(
-                text_blocks,
-                &page_shell,
-                metadata.as_ref(),
-            );
+            let text_classified =
+                classifier.classify_page_with_metadata(text_blocks, &page_shell, metadata.as_ref());
 
             let image_blocks = if extract_images && !raw_page.image_refs.is_empty() {
                 save_page_images(&raw_page.image_refs, &images_dir)?
@@ -166,7 +123,6 @@ fn process_pdf(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    // Warn about pages with no extractable text
     let empty_page_count = pages.iter().filter(|p| p.blocks.is_empty()).count();
     if empty_page_count > 0 {
         eprintln!(
@@ -176,16 +132,33 @@ fn process_pdf(
         );
     }
 
+    let scan_report = hybrid::triage::scan_report(&pages);
+    if !cli.hybrid.is_on() && scan_report.likely_scan_like() {
+        eprintln!(
+            "  warning: {} looks scan-heavy ({} image-only / {} low-density page(s), {} page(s) with readable text); local output may be poor. Try `--hybrid docling`.",
+            pdf_path.display(),
+            scan_report.image_only_pages,
+            scan_report.low_density_pages,
+            scan_report.pages_with_readable_text
+        );
+    }
+
     let mut doc = Document {
         source_path: pdf_path.to_path_buf(),
         pages,
         metadata,
     };
 
-    // Hybrid pass: triage-qualifying pages are uploaded to the external
-    // backend; their markdown replaces the local rendering in the output.
     if cli.hybrid.is_on() {
         let policy = match cli.hybrid_policy {
+            cli::HybridPolicy::Auto if scan_report.likely_scan_like() => {
+                if cli.verbose {
+                    eprintln!(
+                        "  hybrid: document looks scan-heavy; upgrading auto policy to route all pages"
+                    );
+                }
+                hybrid::RoutingPolicy::All
+            }
             cli::HybridPolicy::Auto => hybrid::RoutingPolicy::Auto,
             cli::HybridPolicy::All => hybrid::RoutingPolicy::All,
         };
@@ -213,11 +186,9 @@ fn process_pdf(
         }
     }
 
-    write_document(&doc, pdf_path, cli, format)
+    write_document(&doc, pdf_path, cli)
 }
 
-/// Write each `ImageRef`'s PNG bytes to `images_dir` and produce a matching
-/// `Block` with `BlockKind::Image` whose path is relative to the output dir.
 fn save_page_images(
     image_refs: &[ImageRef],
     images_dir: &std::path::Path,
@@ -238,11 +209,12 @@ fn save_page_images(
             .with_context(|| format!("Failed to write image {}", abs_path.display()))?;
         let rel_path = format!("images/{filename}");
         blocks.push(Block {
-            // Use a high id to avoid collision with text-block ids.
             id: 1_000_000 + img_ref.image_index,
             bbox: img_ref.bbox,
             text: String::new(),
-            kind: BlockKind::Image { path: Some(rel_path) },
+            kind: BlockKind::Image {
+                path: Some(rel_path),
+            },
             font_size: 0.0,
             font_name: "image".to_string(),
             page_num: img_ref.page_num,
@@ -252,14 +224,6 @@ fn save_page_images(
     Ok(blocks)
 }
 
-/// Interleave image blocks among text blocks by Y position.
-///
-/// The text blocks already carry XY-Cut++ reading order. Images are inserted
-/// in front of the first text block whose `y0` is greater than the image's
-/// `y0`, then `reading_order` is re-assigned across the merged sequence. This
-/// is a rough approximation — on multi-column pages an image's true anchor is
-/// in a specific column, but for markdown output it is fine to place it in
-/// the natural Y slot.
 fn merge_text_and_images(mut text: Vec<Block>, mut images: Vec<Block>) -> Vec<Block> {
     if images.is_empty() {
         return text;
@@ -298,179 +262,19 @@ fn merge_text_and_images(mut text: Vec<Block>, mut images: Vec<Block>) -> Vec<Bl
     result
 }
 
-/// Shared: render Document to markdown and write via format writer.
-fn write_document(
-    doc: &Document,
-    input_path: &std::path::Path,
-    cli: &Cli,
-    format: &Format,
-) -> anyhow::Result<()> {
+fn write_document(doc: &Document, input_path: &std::path::Path, cli: &Cli) -> anyhow::Result<()> {
     let output_dir = batch::output_dir_for(input_path, cli.output.as_deref());
     let renderer = MarkdownRenderer::new(!cli.no_images, Some(output_dir.join("images")));
-    let rendered = renderer.render_document(doc)
+    let rendered = renderer
+        .render_document(doc)
         .with_context(|| "Failed to render markdown")?;
-    write_rendered(&rendered, doc, input_path, cli, format)
-}
 
-/// Shared: write an already-rendered document via the chosen format writer.
-fn write_rendered(
-    rendered: &render::markdown::RenderedDocument,
-    doc: &Document,
-    input_path: &std::path::Path,
-    cli: &Cli,
-    format: &Format,
-) -> anyhow::Result<()> {
-    let output_dir = batch::output_dir_for(input_path, cli.output.as_deref());
     let stem = input_path
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
 
-    match format {
-        Format::Raw => {
-            formats::raw::RawFormat::write(rendered, doc, &output_dir, &stem)
-                .with_context(|| format!("Failed to write output to {}", output_dir.display()))?;
-        }
-        Format::Rag => {
-            formats::rag::RagFormat::new(cli.chunk_size)
-                .write(rendered, doc, &output_dir, &stem)
-                .with_context(|| format!("Failed to write RAG output to {}", output_dir.display()))?;
-        }
-        Format::Karpathy => {
-            formats::karpathy::KarpathyFormat::write(rendered, doc, &output_dir, &stem)
-                .with_context(|| format!("Failed to write Karpathy output to {}", output_dir.display()))?;
-        }
-        Format::Kg => {
-            formats::kg::KgFormat::write(rendered, doc, &output_dir, &stem)
-                .with_context(|| format!("Failed to write KG output to {}", output_dir.display()))?;
-        }
-        Format::Json => {
-            formats::json::JsonFormat::write(rendered, doc, &output_dir, &stem)
-                .with_context(|| format!("Failed to write JSON output to {}", output_dir.display()))?;
-        }
-        _ => unreachable!("format validated against input type"),
-    }
-
-    Ok(())
-}
-
-// --- Stubs for new pipelines (implemented in later phases) ---
-
-/// Pipeline A: DOCX → Document → Markdown → Format writer
-fn process_docx(
-    path: &std::path::Path,
-    cli: &Cli,
-    format: &Format,
-) -> anyhow::Result<()> {
-    if cli.verbose {
-        eprintln!("  processing DOCX: {}", path.display());
-    }
-    let doc = docx::extractor::extract(path)
-        .with_context(|| format!("Failed to extract {}", path.display()))?;
-    write_document(&doc, path, cli, format)
-}
-
-/// Pipeline A: EPUB → Document → Markdown → Format writer
-fn process_epub(
-    path: &std::path::Path,
-    cli: &Cli,
-    format: &Format,
-) -> anyhow::Result<()> {
-    if cli.verbose {
-        eprintln!("  processing EPUB: {}", path.display());
-    }
-    let doc = epub::extractor::extract(path)
-        .with_context(|| format!("Failed to extract {}", path.display()))?;
-    write_document(&doc, path, cli, format)
-}
-
-/// Pipeline A: PPTX → Document → Markdown → Format writer
-fn process_pptx(
-    path: &std::path::Path,
-    cli: &Cli,
-    format: &Format,
-) -> anyhow::Result<()> {
-    if cli.verbose {
-        eprintln!("  processing PPTX: {}", path.display());
-    }
-    let doc = pptx::extractor::extract(path)
-        .with_context(|| format!("Failed to extract {}", path.display()))?;
-    write_document(&doc, path, cli, format)
-}
-
-/// Pipeline A: HTML → Document → Markdown → Format writer
-fn process_html(
-    path: &std::path::Path,
-    cli: &Cli,
-    format: &Format,
-) -> anyhow::Result<()> {
-    if cli.verbose {
-        eprintln!("  processing HTML: {}", path.display());
-    }
-    let doc = html_extract::extractor::extract(path)
-        .with_context(|| format!("Failed to extract {}", path.display()))?;
-    write_document(&doc, path, cli, format)
-}
-
-fn process_md_to_typst(
-    path: &std::path::Path,
-    cli: &Cli,
-) -> anyhow::Result<()> {
-    if cli.verbose {
-        eprintln!("  processing Markdown → Typst: {}", path.display());
-    }
-
-    let md_text = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
-
-    let config = typst::config::load_config(cli.typst_config.as_deref());
-
-    // CLI --paper overrides config
-    let paper = cli.paper.as_deref()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            let p = &config.page.paper;
-            if p.is_empty() { None } else { Some(p.as_str()) }
-        });
-
-    let mut result = typst::converter::convert(&md_text, &config);
-
-    if let Some(paper) = paper {
-        result = format!("#set page(paper: \"{paper}\")\n\n{result}");
-    }
-
-    if cli.stdout {
-        print!("{result}");
-    } else {
-        let output_path = cli.output.as_ref()
-            .map(|o| o.to_path_buf())
-            .unwrap_or_else(|| path.with_extension("typ"));
-        std::fs::write(&output_path, &result)
-            .with_context(|| format!("Failed to write {}", output_path.display()))?;
-        if cli.verbose {
-            eprintln!("  wrote: {}", output_path.display());
-        }
-    }
-
-    Ok(())
-}
-
-/// Pipeline C: SVG → PNG
-fn process_svg_to_png(
-    path: &std::path::Path,
-    cli: &Cli,
-) -> anyhow::Result<()> {
-    if cli.verbose {
-        eprintln!("  processing SVG → PNG: {}", path.display());
-    }
-    let output_path = cli.output.as_ref()
-        .map(|o| o.to_path_buf())
-        .unwrap_or_else(|| path.with_extension("png"));
-    svg::converter::convert(path, &output_path)
-        .with_context(|| format!("Failed to convert {}", path.display()))?;
-    if cli.verbose {
-        eprintln!("  wrote: {}", output_path.display());
-    }
-    Ok(())
+    formats::raw::RawFormat::write(&rendered, doc, &output_dir, &stem)
+        .with_context(|| format!("Failed to write output to {}", output_dir.display()))
 }

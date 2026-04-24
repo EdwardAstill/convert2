@@ -1,11 +1,16 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use mupdf::{Document, ImageFormat, MetadataName, TextPageFlags};
 use mupdf::text_page::TextBlockType;
+use mupdf::{Document, ImageFormat, MetadataName, TextPageFlags};
 
 use crate::document::types::{Bbox, DocumentMetadata, ImageRef, RawPage, RawTextBlock};
 use crate::error::{VtvError, VtvResult};
+
+#[path = "text_cleanup.rs"]
+mod text_cleanup;
+
+use self::text_cleanup::cleanup_extracted_text;
 
 pub struct PdfExtractor;
 
@@ -46,20 +51,29 @@ impl PdfExtractor {
             message: e.to_string(),
         })? as usize;
 
-        let title = doc
-            .metadata(MetadataName::Title)
-            .ok()
-            .and_then(|s| if s.is_empty() { None } else { Some(s) });
+        let title = doc.metadata(MetadataName::Title).ok().and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        });
 
-        let author = doc
-            .metadata(MetadataName::Author)
-            .ok()
-            .and_then(|s| if s.is_empty() { None } else { Some(s) });
+        let author = doc.metadata(MetadataName::Author).ok().and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        });
 
-        let subject = doc
-            .metadata(MetadataName::Subject)
-            .ok()
-            .and_then(|s| if s.is_empty() { None } else { Some(s) });
+        let subject = doc.metadata(MetadataName::Subject).ok().and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        });
 
         Ok(DocumentMetadata {
             title,
@@ -89,9 +103,18 @@ impl PdfExtractor {
 
         // Extract metadata from the already-open document
         let metadata = DocumentMetadata {
-            title: doc.metadata(MetadataName::Title).ok().filter(|s| !s.is_empty()),
-            author: doc.metadata(MetadataName::Author).ok().filter(|s| !s.is_empty()),
-            subject: doc.metadata(MetadataName::Subject).ok().filter(|s| !s.is_empty()),
+            title: doc
+                .metadata(MetadataName::Title)
+                .ok()
+                .filter(|s| !s.is_empty()),
+            author: doc
+                .metadata(MetadataName::Author)
+                .ok()
+                .filter(|s| !s.is_empty()),
+            subject: doc
+                .metadata(MetadataName::Subject)
+                .ok()
+                .filter(|s| !s.is_empty()),
             page_count,
         };
 
@@ -101,10 +124,12 @@ impl PdfExtractor {
     // --- private helpers ---
 
     fn extract_page(doc: &Document, page_num: usize) -> VtvResult<RawPage> {
-        let page = doc.load_page(page_num as i32).map_err(|e| VtvError::PdfExtraction {
-            page: page_num,
-            message: e.to_string(),
-        })?;
+        let page = doc
+            .load_page(page_num as i32)
+            .map_err(|e| VtvError::PdfExtraction {
+                page: page_num,
+                message: e.to_string(),
+            })?;
 
         let bounds = page.bounds().map_err(|e| VtvError::PdfExtraction {
             page: page_num,
@@ -125,7 +150,7 @@ impl PdfExtractor {
         for (block_id, block) in text_page.blocks().enumerate() {
             match block.r#type() {
                 TextBlockType::Text => {
-                    let text = Self::collect_block_text(&block);
+                    let text = cleanup_extracted_text(&Self::collect_block_text(&block));
                     if text.is_empty() {
                         continue;
                     }
@@ -241,14 +266,23 @@ impl PdfExtractor {
             }
 
             // Find the dominant baseline for normal-sized chars in this row.
-            let row_baseline = largest_char_baseline(row, block_dominant_size)
-                .unwrap_or_else(|| {
-                    let sum: f32 = row.iter().filter(|c| c.ch.is_some()).map(|c| c.origin_y).sum();
+            let row_baseline =
+                largest_char_baseline(row, block_dominant_size).unwrap_or_else(|| {
+                    let sum: f32 = row
+                        .iter()
+                        .filter(|c| c.ch.is_some())
+                        .map(|c| c.origin_y)
+                        .sum();
                     let count = row.iter().filter(|c| c.ch.is_some()).count();
-                    if count > 0 { sum / count as f32 } else { 0.0 }
+                    if count > 0 {
+                        sum / count as f32
+                    } else {
+                        0.0
+                    }
                 });
 
-            let line_str = build_line_with_scripts_from_info(row, block_dominant_size, row_baseline);
+            let line_str =
+                build_line_with_scripts_from_info(row, block_dominant_size, row_baseline);
 
             let trimmed = line_str.trim_end().to_owned();
             if !trimmed.is_empty() {
@@ -262,7 +296,10 @@ impl PdfExtractor {
     /// Fallback text collection for vertical/rotated text blocks.
     /// Processes each mupdf line independently with subscript detection
     /// but does not regroup characters across lines.
-    fn collect_block_text_per_line(block: &mupdf::TextBlock<'_>, block_dominant_size: f32) -> String {
+    fn collect_block_text_per_line(
+        block: &mupdf::TextBlock<'_>,
+        block_dominant_size: f32,
+    ) -> String {
         let mut lines_text: Vec<String> = Vec::new();
 
         for line in block.lines() {
@@ -284,8 +321,8 @@ impl PdfExtractor {
                 continue;
             }
 
-            let baseline = largest_char_baseline(&chars, block_dominant_size)
-                .unwrap_or_else(|| {
+            let baseline =
+                largest_char_baseline(&chars, block_dominant_size).unwrap_or_else(|| {
                     let sum: f32 = chars.iter().map(|c| c.origin_y).sum();
                     sum / chars.len() as f32
                 });
@@ -385,10 +422,15 @@ fn group_into_text_rows(all_chars: &[CharInfo], block_dominant_size: f32) -> Vec
     let size_threshold = block_dominant_size * 0.80;
     let mut row_baselines: Vec<f32> = Vec::new();
 
-    for ci in all_chars.iter().filter(|c| c.ch.is_some() && c.size >= size_threshold) {
+    for ci in all_chars
+        .iter()
+        .filter(|c| c.ch.is_some() && c.size >= size_threshold)
+    {
         let y = ci.origin_y;
         // Check if this y is close to an existing row baseline.
-        let found = row_baselines.iter().any(|&b| (b - y).abs() < block_dominant_size * 0.5);
+        let found = row_baselines
+            .iter()
+            .any(|&b| (b - y).abs() < block_dominant_size * 0.5);
         if !found {
             row_baselines.push(y);
         }
@@ -399,7 +441,11 @@ fn group_into_text_rows(all_chars: &[CharInfo], block_dominant_size: f32) -> Vec
 
     if row_baselines.is_empty() {
         // No normal-sized chars — treat all chars as one row.
-        let mut row: Vec<CharInfo> = all_chars.iter().filter(|c| c.ch.is_some()).cloned().collect();
+        let mut row: Vec<CharInfo> = all_chars
+            .iter()
+            .filter(|c| c.ch.is_some())
+            .cloned()
+            .collect();
         row.sort_by(|a, b| a.origin_x.partial_cmp(&b.origin_x).unwrap());
         return vec![row];
     }
@@ -715,8 +761,18 @@ mod tests {
     #[test]
     fn test_group_into_text_rows_single_row() {
         let chars = vec![
-            CharInfo { ch: Some('H'), size: 10.0, origin_x: 0.0, origin_y: 100.0 },
-            CharInfo { ch: Some('i'), size: 10.0, origin_x: 6.0, origin_y: 100.0 },
+            CharInfo {
+                ch: Some('H'),
+                size: 10.0,
+                origin_x: 0.0,
+                origin_y: 100.0,
+            },
+            CharInfo {
+                ch: Some('i'),
+                size: 10.0,
+                origin_x: 6.0,
+                origin_y: 100.0,
+            },
         ];
         let rows = group_into_text_rows(&chars, 10.0);
         assert_eq!(rows.len(), 1);
@@ -726,8 +782,18 @@ mod tests {
     #[test]
     fn test_group_into_text_rows_two_rows() {
         let chars = vec![
-            CharInfo { ch: Some('A'), size: 10.0, origin_x: 0.0, origin_y: 100.0 },
-            CharInfo { ch: Some('B'), size: 10.0, origin_x: 0.0, origin_y: 120.0 },
+            CharInfo {
+                ch: Some('A'),
+                size: 10.0,
+                origin_x: 0.0,
+                origin_y: 100.0,
+            },
+            CharInfo {
+                ch: Some('B'),
+                size: 10.0,
+                origin_x: 0.0,
+                origin_y: 120.0,
+            },
         ];
         let rows = group_into_text_rows(&chars, 10.0);
         assert_eq!(rows.len(), 2);
@@ -739,9 +805,24 @@ mod tests {
     fn test_group_into_text_rows_subscript_assigned_to_nearest() {
         // Normal chars at y=100 and y=120, subscript at y=102 (near first row)
         let chars = vec![
-            CharInfo { ch: Some('P'), size: 10.0, origin_x: 0.0, origin_y: 100.0 },
-            CharInfo { ch: Some('n'), size: 7.0, origin_x: 6.0, origin_y: 102.0 },
-            CharInfo { ch: Some('Q'), size: 10.0, origin_x: 0.0, origin_y: 120.0 },
+            CharInfo {
+                ch: Some('P'),
+                size: 10.0,
+                origin_x: 0.0,
+                origin_y: 100.0,
+            },
+            CharInfo {
+                ch: Some('n'),
+                size: 7.0,
+                origin_x: 6.0,
+                origin_y: 102.0,
+            },
+            CharInfo {
+                ch: Some('Q'),
+                size: 10.0,
+                origin_x: 0.0,
+                origin_y: 120.0,
+            },
         ];
         let rows = group_into_text_rows(&chars, 10.0);
         assert_eq!(rows.len(), 2);
@@ -757,8 +838,18 @@ mod tests {
     fn test_group_into_text_rows_x_sorted() {
         // Characters in wrong x-order should be sorted
         let chars = vec![
-            CharInfo { ch: Some('B'), size: 10.0, origin_x: 20.0, origin_y: 100.0 },
-            CharInfo { ch: Some('A'), size: 10.0, origin_x: 0.0, origin_y: 100.0 },
+            CharInfo {
+                ch: Some('B'),
+                size: 10.0,
+                origin_x: 20.0,
+                origin_y: 100.0,
+            },
+            CharInfo {
+                ch: Some('A'),
+                size: 10.0,
+                origin_x: 0.0,
+                origin_y: 100.0,
+            },
         ];
         let rows = group_into_text_rows(&chars, 10.0);
         assert_eq!(rows[0][0].ch, Some('A'));
@@ -770,10 +861,30 @@ mod tests {
         // Simulates the AISC pattern: φ(normal) c(sub) P(normal) n(sub)
         // sorted by x-position within a single row.
         let chars = vec![
-            CharInfo { ch: Some('φ'), size: 9.5, origin_x: 205.0, origin_y: 372.0 },
-            CharInfo { ch: Some('c'), size: 7.0, origin_x: 211.0, origin_y: 374.0 },
-            CharInfo { ch: Some('P'), size: 9.5, origin_x: 215.0, origin_y: 372.0 },
-            CharInfo { ch: Some('n'), size: 7.0, origin_x: 221.0, origin_y: 374.0 },
+            CharInfo {
+                ch: Some('φ'),
+                size: 9.5,
+                origin_x: 205.0,
+                origin_y: 372.0,
+            },
+            CharInfo {
+                ch: Some('c'),
+                size: 7.0,
+                origin_x: 211.0,
+                origin_y: 374.0,
+            },
+            CharInfo {
+                ch: Some('P'),
+                size: 9.5,
+                origin_x: 215.0,
+                origin_y: 372.0,
+            },
+            CharInfo {
+                ch: Some('n'),
+                size: 7.0,
+                origin_x: 221.0,
+                origin_y: 374.0,
+            },
         ];
         let result = build_line_with_scripts_from_info(&chars, 9.5, 372.0);
         assert_eq!(result, "φ_{c}P_{n}");

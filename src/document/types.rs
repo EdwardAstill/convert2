@@ -39,10 +39,7 @@ impl Bbox {
 
     /// True if this bbox overlaps with other (touching edges count as overlap)
     pub fn overlaps(&self, other: &Bbox) -> bool {
-        self.x0 < other.x1
-            && self.x1 > other.x0
-            && self.y0 < other.y1
-            && self.y1 > other.y0
+        self.x0 < other.x1 && self.x1 > other.x0 && self.y0 < other.y1 && self.y1 > other.y0
     }
 
     /// Vertical gap between bottom of self and top of other (negative = overlap)
@@ -91,22 +88,38 @@ pub struct ImageRef {
 /// Block kind — determined by the classifier after layout analysis.
 #[derive(Clone, Debug, PartialEq)]
 pub enum BlockKind {
-    Heading { level: u8 }, // h1..h6
+    Heading {
+        level: u8,
+    }, // h1..h6
     Paragraph,
-    ListItem { ordered: bool, depth: u8 },
-    TableCell { row: usize, col: usize },
+    ListItem {
+        ordered: bool,
+        depth: u8,
+    },
+    TableCell {
+        row: usize,
+        col: usize,
+    },
     Caption,
     CodeBlock,
     PageNumber,
     RunningHeader,
     RunningFooter,
-    Image { path: Option<String> },
+    Image {
+        path: Option<String>,
+    },
     /// A LaTeX-encoded math formula. Produced by the Docling hybrid backend.
     /// `display=true` emits a `$$ … $$` block; `display=false` emits `$…$`.
-    Formula { latex: String, display: bool },
+    Formula {
+        latex: String,
+        display: bool,
+    },
     /// A figure with an optional caption, linked by relative path.
     /// Produced by the Docling hybrid backend.
-    Figure { path: Option<String>, caption: Option<String> },
+    Figure {
+        path: Option<String>,
+        caption: Option<String>,
+    },
 }
 
 /// A classified, reading-order-assigned block.

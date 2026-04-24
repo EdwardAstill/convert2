@@ -140,9 +140,7 @@ fn identify_cross_layout(
     let threshold = config.beta * max_width;
 
     for &idx in indices {
-        if blocks[idx].bbox.width() >= threshold
-            && has_min_overlaps(idx, indices, blocks, config)
-        {
+        if blocks[idx].bbox.width() >= threshold && has_min_overlaps(idx, indices, blocks, config) {
             result.insert(idx);
         }
     }
@@ -270,7 +268,10 @@ fn find_best_horizontal_cut(
     config: &XyCutConfig,
 ) -> CutInfo {
     if indices.len() < 2 {
-        return CutInfo { position: 0.0, gap: 0.0 };
+        return CutInfo {
+            position: 0.0,
+            gap: 0.0,
+        };
     }
 
     let mut sorted: Vec<usize> = indices.to_vec();
@@ -356,7 +357,10 @@ fn find_vertical_cut_by_edges(
     config: &XyCutConfig,
 ) -> CutInfo {
     if indices.len() < 2 {
-        return CutInfo { position: 0.0, gap: 0.0 };
+        return CutInfo {
+            position: 0.0,
+            gap: 0.0,
+        };
     }
 
     let mut sorted: Vec<usize> = indices.to_vec();
@@ -454,11 +458,7 @@ fn split_by_vertical_cut(
 // Phase 4 — merge cross-layout elements back
 // ============================================================================
 
-fn merge_cross_layout(
-    main: Vec<usize>,
-    cross: Vec<usize>,
-    blocks: &[RawTextBlock],
-) -> Vec<usize> {
+fn merge_cross_layout(main: Vec<usize>, cross: Vec<usize>, blocks: &[RawTextBlock]) -> Vec<usize> {
     if cross.is_empty() {
         return main;
     }
@@ -637,7 +637,10 @@ mod tests {
             make(3, 0.0, 80.0, 90.0, 100.0),
             make(4, 110.0, 80.0, 200.0, 100.0),
         ];
-        let config = XyCutConfig { beta: 0.9, ..Default::default() };
+        let config = XyCutConfig {
+            beta: 0.9,
+            ..Default::default()
+        };
         let ord = build_xycut_order(&b, &config);
         assert_eq!(ord[0], 0, "title must be first");
         let pos = |i: usize| ord.iter().position(|&x| x == i).unwrap();
@@ -719,14 +722,17 @@ mod tests {
         // and the merge places the header by Y. This test asserts the header
         // is sandwiched between the two body vertical regions in the output.
         let b = vec![
-            make(0, 0.0, 0.0, 200.0, 20.0),     // title (cross)
-            make(1, 0.0, 40.0, 90.0, 60.0),     // L1
-            make(2, 110.0, 40.0, 200.0, 60.0),  // R1
-            make(3, 0.0, 100.0, 200.0, 120.0),  // section header (cross)
-            make(4, 0.0, 140.0, 90.0, 160.0),   // L2
-            make(5, 110.0, 140.0, 200.0, 160.0),// R2
+            make(0, 0.0, 0.0, 200.0, 20.0),      // title (cross)
+            make(1, 0.0, 40.0, 90.0, 60.0),      // L1
+            make(2, 110.0, 40.0, 200.0, 60.0),   // R1
+            make(3, 0.0, 100.0, 200.0, 120.0),   // section header (cross)
+            make(4, 0.0, 140.0, 90.0, 160.0),    // L2
+            make(5, 110.0, 140.0, 200.0, 160.0), // R2
         ];
-        let config = XyCutConfig { beta: 0.9, ..Default::default() };
+        let config = XyCutConfig {
+            beta: 0.9,
+            ..Default::default()
+        };
         let ord = build_xycut_order(&b, &config);
         assert_eq!(ord[0], 0, "title first");
         let hpos = ord.iter().position(|&x| x == 3).unwrap();
