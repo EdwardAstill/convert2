@@ -30,25 +30,29 @@ Out of active scope at the repo root:
 
 ## Install
 
-`cnv` bundles MuPDF and builds it from source on first compile. You need `clang`.
+Prebuilt Linux x86_64 binary from GitHub Releases:
+
+```sh
+mkdir -p ~/.local/bin
+gh release download -R EdwardAstill/convert2 --pattern 'cnv' --output ~/.local/bin/cnv
+chmod +x ~/.local/bin/cnv
+```
+
+Make sure `~/.local/bin` is on your `$PATH`. The release also ships a `convert2-x86_64-linux.tar.gz` archive if you'd rather extract it yourself.
+
+### From source (contributors only)
+
+`cnv` bundles MuPDF and builds it from source on first compile. You need `clang` and `fontconfig` dev headers.
 
 | Platform | Command |
 | --- | --- |
-| Arch Linux | `sudo pacman -S clang` |
-| Ubuntu / Debian | `sudo apt install clang` |
-| macOS | `xcode-select --install` |
-
-Build:
+| Arch Linux | `sudo pacman -S clang fontconfig` |
+| Ubuntu / Debian | `sudo apt install clang libfontconfig1-dev` |
+| macOS | `xcode-select --install && brew install fontconfig` |
 
 ```sh
 cargo build --release
 cp target/release/cnv ~/.local/bin/
-```
-
-Or:
-
-```sh
-cargo install --path .
 ```
 
 ## Usage
