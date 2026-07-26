@@ -10,7 +10,7 @@ Active scope note: the main `pdfp` binary is now a local PDF processor. Markdown
 | --- | --- | ---: | ---: |
 | Unit tests (inline `#[cfg(test)]`) | `cargo test --bin pdfp` | broad inline suite | ~0.05 s |
 | CLI help smoke tests | `cargo test --test cli_help` | one pass over every command path | ~0.05 s |
-| Metadata CLI integration | `cargo test --test metadata` | show/set/clear, Unicode strings, dates, XMP warning, signed-PDF refusal | ~0.1 s |
+| Metadata CLI integration | `cargo test --test metadata` | show/set/clear, all writable fields, Unicode/empty strings, dates, XMP/signature handling, encrypted-PDF refusal | ~0.1 s |
 | Processor command units | `cargo test processor::` | focused parser/order tests | ~0.05 s |
 | Golden smoke/regression fixtures | `cargo test --test golden` | 4 (skip when fixtures are absent) | ~0.05 s+ |
 | Golden corpus sweep | `cargo test --test golden -- --ignored golden_corpus_sweep` | 1 (iterates 13 PDFs) | ~16 s |
@@ -125,6 +125,11 @@ target/debug/pdfp impose booklet \
 
 target/debug/pdfp page resize example/pdf/golden__lorem.pdf \
   --paper a4 --fit contain -o target/lorem-a4.pdf
+
+target/debug/pdfp page text example/pdf/golden__lorem.pdf \
+  -o target/lorem-labelled.pdf --text "Text overlay smoke" \
+  --pages 1 --x 36 --y 36 --origin top-left \
+  --font helvetica-bold --font-size 18 --colour '#cc0000'
 ```
 
 Expected checks:
@@ -135,6 +140,7 @@ Expected checks:
 - `pdfp inspect target/2up.pdf --json | jq '.page_count == 4'`
 - `pdfp inspect target/booklet.pdf --json | jq '(.page_count % 2) == 0'`
 - `pdfp inspect target/lorem-a4.pdf --json | jq '.pages[0].width >= 594 and .pages[0].height >= 841'`
+- `pdfp search target/lorem-labelled.pdf 'Text overlay smoke' --ocr off --json | jq '.matches[0].page == 1'`
 
 Current processor limitations:
 
@@ -145,9 +151,9 @@ Current processor limitations:
 ### What the tests actually cover
 
 - **XY-Cut++ reading order** — 16 unit tests in `src/layout/xycut.rs::tests` exercising two-column pages, spanning titles, narrow-outlier retry, cross-layout pre-masking, and degenerate inputs.
-- **CLI help** — `tests/cli_help.rs` runs `pdfp --help` plus every nested command help path, including `pdfp pages extract --help`, `pdfp impose booklet --help`, and `pdfp page resize --help`.
-- **Processor CLI and PDF operations** — page range parsing, inspect/search smoke checks, safe extract/delete/split, graft-based reorder/merge, booklet ordering, 2-up page count, and A4 resize geometry.
-- **Metadata CLI** — `tests/metadata.rs` creates small PDFs with `lopdf` and verifies metadata show/set/clear round trips, same-path refusal, Unicode text strings, date validation, XMP warnings, and signed-PDF write refusal.
+- **CLI help** — `tests/cli_help.rs` runs `pdfp --help` plus every nested command help path, including `pdfp pages extract --help`, `pdfp impose booklet --help`, and `pdfp page text --help`.
+- **Processor CLI and PDF operations** — page range parsing, inspect/search smoke checks, safe extract/delete/split, graft-based reorder/merge, booklet ordering, 2-up page count, A4 resize geometry, and searchable text overlays with page/font/colour/position assertions.
+- **Metadata CLI** — `tests/metadata.rs` creates small PDFs with `lopdf` and verifies metadata show/set/clear round trips for every supported field, same-path refusal, Unicode and empty text strings, dates, XMP warnings, signed-PDF policy, and safe refusal of encrypted PDFs.
 - **Classifier heuristics** — tests in `src/layout/classifier.rs::tests` covering each `BlockKind` detection rule; the Phase 3 metadata tests verify struct-tree overrides and bold-at-body-size promotion using a mock `PageMetadata`.
 - **Metadata lookup** — 6 tests in `src/pdf/metadata.rs::tests` covering overlap scoring, bbox matching, and the stub loader.
 - **PDF extraction subscript/superscript logic** — 20+ tests in `src/pdf/extractor.rs::tests` exercising classify_char_script, group_into_text_rows, and real-world traces from AISC-360.

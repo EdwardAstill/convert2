@@ -7,4 +7,5 @@ pub mod page_range;
 pub mod pages;
 pub mod resize;
 pub mod search;
+pub mod text;
 pub mod update;

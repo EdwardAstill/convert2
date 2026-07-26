@@ -38,7 +38,7 @@ pub enum Command {
     Pages(PagesCommand),
     /// Print imposition operations such as 2-up and booklet output
     Impose(ImposeCommand),
-    /// Page-level geometry operations
+    /// Page-level editing operations
     Page(PageCommand),
     /// Update pdfp to the latest GitHub release
     Update(UpdateArgs),
@@ -532,6 +532,8 @@ pub enum PageSubcommand {
     Resize(ResizeArgs),
     /// Set CropBox on selected pages
     Crop(CropArgs),
+    /// Add a searchable text overlay to selected pages
+    Text(PageTextArgs),
 }
 
 #[derive(Args, Debug)]
@@ -579,6 +581,78 @@ pub struct CropArgs {
     /// Crop box as x0 y0 x1 y1 in PDF points
     #[arg(long = "box", num_args = 4, value_names = ["X0", "Y0", "X1", "Y1"])]
     pub crop_box: Vec<f32>,
+}
+
+#[derive(Args, Debug)]
+pub struct PageTextArgs {
+    /// Input PDF
+    pub input: PathBuf,
+
+    /// Output PDF
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Text to add. Newlines create additional lines.
+    #[arg(long)]
+    pub text: String,
+
+    /// 1-indexed page range, e.g. `1-3,9`, `odd`, `even`, or `all`
+    #[arg(long, default_value = "all")]
+    pub pages: String,
+
+    /// Horizontal baseline position from the selected origin, in PDF points
+    #[arg(long)]
+    pub x: f32,
+
+    /// Vertical baseline position from the selected origin, in PDF points
+    #[arg(long)]
+    pub y: f32,
+
+    /// Coordinate origin used by --x and --y
+    #[arg(long, value_enum, default_value = "bottom-left")]
+    pub origin: TextOrigin,
+
+    /// Built-in PDF font
+    #[arg(long, value_enum, default_value = "helvetica")]
+    pub font: PdfTextFont,
+
+    /// Font size in PDF points
+    #[arg(long = "font-size", alias = "size", default_value = "12")]
+    pub font_size: f32,
+
+    /// Text colour: a name or #RRGGBB/#RGB
+    #[arg(long = "color", alias = "colour", default_value = "#000000")]
+    pub color: String,
+
+    /// Distance between multiline baselines in points (default: 1.2 × font size)
+    #[arg(long)]
+    pub line_height: Option<f32>,
+
+    /// Allow writing PDFs that appear to contain signature fields
+    #[arg(long)]
+    pub force_signed: bool,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextOrigin {
+    BottomLeft,
+    TopLeft,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PdfTextFont {
+    Helvetica,
+    HelveticaBold,
+    HelveticaOblique,
+    HelveticaBoldOblique,
+    TimesRoman,
+    TimesBold,
+    TimesItalic,
+    TimesBoldItalic,
+    Courier,
+    CourierBold,
+    CourierOblique,
+    CourierBoldOblique,
 }
 
 impl Cli {

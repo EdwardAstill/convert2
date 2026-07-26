@@ -13,6 +13,7 @@ pub fn run(args: &PageCommand) -> anyhow::Result<()> {
     match &args.command {
         PageSubcommand::Resize(args) => resize(args),
         PageSubcommand::Crop(args) => crop(args),
+        PageSubcommand::Text(args) => crate::processor::text::run(args),
     }
 }
 

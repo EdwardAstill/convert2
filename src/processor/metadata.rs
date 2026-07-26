@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context};
 use lopdf::{decode_text_string, text_string, Dictionary, Document, Object, ObjectId};
 use serde::Serialize;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime, UtcOffset};
+use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime, Time, UtcOffset};
 
 use crate::cli::{
     MetadataClearArgs, MetadataCommand, MetadataField, MetadataSetArgs, MetadataShowArgs,
@@ -107,8 +107,7 @@ fn set(args: &MetadataSetArgs) -> anyhow::Result<()> {
     validate_signature_policy(&input_report, args.force_signed)?;
     let warnings = write_warnings(&input_report);
 
-    let mut doc = Document::load(&args.input)
-        .with_context(|| format!("failed to load {}", args.input.display()))?;
+    let mut doc = load_document(&args.input)?;
     mutate_info_dictionary(&mut doc, |dict| {
         for update in &updates {
             dict.set(update.field.pdf_key(), text_string(&update.value));
@@ -143,8 +142,7 @@ fn clear(args: &MetadataClearArgs) -> anyhow::Result<()> {
     validate_signature_policy(&input_report, args.force_signed)?;
     let warnings = write_warnings(&input_report);
 
-    let mut doc = Document::load(&args.input)
-        .with_context(|| format!("failed to load {}", args.input.display()))?;
+    let mut doc = load_document(&args.input)?;
     mutate_info_dictionary(&mut doc, |dict| {
         for field in &fields {
             dict.remove(field.pdf_key());
@@ -202,7 +200,7 @@ fn push_string_update(updates: &mut Vec<FieldUpdate>, field: InfoField, value: &
 }
 
 fn load_report(path: &Path) -> anyhow::Result<MetadataReport> {
-    let doc = Document::load(path).with_context(|| format!("failed to load {}", path.display()))?;
+    let doc = load_document(path)?;
     let info = info_dictionary(&doc)
         .map(read_info_metadata)
         .unwrap_or_default();
@@ -219,6 +217,18 @@ fn load_report(path: &Path) -> anyhow::Result<MetadataReport> {
             present: signature_fields_present(&doc),
         },
     })
+}
+
+fn load_document(path: &Path) -> anyhow::Result<Document> {
+    let doc = Document::load(path).with_context(|| format!("failed to load {}", path.display()))?;
+    if doc.is_encrypted() || doc.was_encrypted() {
+        bail!(
+            "{} is encrypted/password-protected; decrypt it before using `pdfp metadata` \
+             (for example: qpdf --decrypt input.pdf decrypted.pdf)",
+            path.display()
+        );
+    }
+    Ok(doc)
 }
 
 fn read_info_metadata(dict: &Dictionary) -> PdfInfoMetadata {
@@ -238,7 +248,6 @@ fn decode_info_field(dict: &Dictionary, key: &[u8]) -> Option<String> {
     dict.get(key)
         .ok()
         .and_then(|object| decode_text_string(object).ok())
-        .filter(|value| !value.is_empty())
 }
 
 fn mutate_info_dictionary<F>(doc: &mut Document, mutate: F) -> anyhow::Result<()>
@@ -478,25 +487,59 @@ fn valid_pdf_date(value: &str) -> bool {
     let Some(rest) = value.strip_prefix("D:") else {
         return false;
     };
-    if rest.len() == 14 {
-        return rest.bytes().all(|byte| byte.is_ascii_digit());
+    let bytes = rest.as_bytes();
+    if !matches!(bytes.len(), 14 | 15 | 21) || !bytes[..14].iter().all(u8::is_ascii_digit) {
+        return false;
     }
-    if rest.len() == 15 {
-        return rest[..14].bytes().all(|byte| byte.is_ascii_digit()) && &rest[14..] == "Z";
+
+    let year = four_digits(&bytes[0..4]).unwrap_or_default() as i32;
+    let Some(month) = two_digits(&bytes[4..6]).and_then(|value| Month::try_from(value).ok()) else {
+        return false;
+    };
+    let Some(day) = two_digits(&bytes[6..8]) else {
+        return false;
+    };
+    let Some(hour) = two_digits(&bytes[8..10]) else {
+        return false;
+    };
+    let Some(minute) = two_digits(&bytes[10..12]) else {
+        return false;
+    };
+    let Some(second) = two_digits(&bytes[12..14]) else {
+        return false;
+    };
+    if Date::from_calendar_date(year, month, day).is_err()
+        || Time::from_hms(hour, minute, second).is_err()
+    {
+        return false;
     }
-    if rest.len() == 21 {
-        let digits = &rest[..14];
-        let suffix = rest.as_bytes();
-        return digits.bytes().all(|byte| byte.is_ascii_digit())
-            && matches!(suffix[14], b'+' | b'-')
-            && suffix[15].is_ascii_digit()
-            && suffix[16].is_ascii_digit()
-            && suffix[17] == b'\''
-            && suffix[18].is_ascii_digit()
-            && suffix[19].is_ascii_digit()
-            && suffix[20] == b'\'';
+
+    match bytes.len() {
+        14 => true,
+        15 => bytes[14] == b'Z',
+        21 => {
+            matches!(bytes[14], b'+' | b'-')
+                && bytes[17] == b'\''
+                && bytes[20] == b'\''
+                && two_digits(&bytes[15..17]).is_some_and(|hours| hours <= 23)
+                && two_digits(&bytes[18..20]).is_some_and(|minutes| minutes <= 59)
+        }
+        _ => false,
     }
-    false
+}
+
+fn two_digits(bytes: &[u8]) -> Option<u8> {
+    (bytes.len() == 2 && bytes.iter().all(u8::is_ascii_digit))
+        .then(|| (bytes[0] - b'0') * 10 + (bytes[1] - b'0'))
+}
+
+fn four_digits(bytes: &[u8]) -> Option<u16> {
+    (bytes.len() == 4 && bytes.iter().all(u8::is_ascii_digit)).then(|| {
+        u16::from(bytes[0] - b'0') * 1000
+            + u16::from(bytes[1] - b'0') * 100
+            + u16::from(bytes[2] - b'0') * 10
+            + u16::from(bytes[3] - b'0')
+    })
 }
 
 fn format_pdf_date(date_time: OffsetDateTime) -> String {
@@ -682,5 +725,10 @@ mod tests {
         assert!(valid_pdf_date("D:20260519123000+08'00'"));
         assert!(!valid_pdf_date("D:20260519123000+0800"));
         assert!(!valid_pdf_date("D:2026051912300Z"));
+        assert!(!valid_pdf_date("D:20261319123000Z"));
+        assert!(!valid_pdf_date("D:20260230123000Z"));
+        assert!(!valid_pdf_date("D:20260519243000Z"));
+        assert!(!valid_pdf_date("D:20260519123000+24'00'"));
+        assert!(!valid_pdf_date("D:20260519123💥"));
     }
 }

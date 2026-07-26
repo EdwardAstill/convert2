@@ -34,6 +34,7 @@ fn every_command_path_prints_help() {
         &["page"],
         &["page", "resize"],
         &["page", "crop"],
+        &["page", "text"],
     ];
 
     for command in commands {

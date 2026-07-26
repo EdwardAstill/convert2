@@ -22,7 +22,8 @@ The CLI layer defines all command-line arguments, types, and defaults. The proce
 | `pages.rs` | `pdfp pages` | Page operations: extract, delete, split, reorder, merge |
 | `page_range.rs` | — | Page range parsing: `1`, `1-3`, `odd`, `even`, `all` |
 | `impose.rs` | `pdfp impose` | Imposition: 2-up, booklet |
-| `resize.rs` | `pdfp page resize` | Page resize to target paper size (A4, Letter, etc.) |
+| `resize.rs` | `pdfp page resize`, `pdfp page crop` | Page resize and CropBox editing |
+| `text.rs` | `pdfp page text` | Searchable text overlays with font, colour, page, and position controls |
 | `doctor.rs` | `pdfp doctor` | Runtime dependency check (OCR availability, version) |
 | `update.rs` | `pdfp update` | Self-update: check, download, install |
 

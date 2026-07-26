@@ -14,7 +14,7 @@ pdfp holds a unique position among PDF tools. These are the things that make it 
 
 5. **Conservative/review-safe mode** — `--conservative` disables speculative reconstruction (tables as Markdown tables, formulas as LaTeX) and emits only layout-preserving output. Critical for engineering/legal/standards documents where accuracy > prettiness.
 
-6. **Page operations in the same binary** — Extract, delete, split, reorder, merge, resize, impose (2-up, booklet). No need for separate tools like qpdf or pdftk.
+6. **Page operations in the same binary** — Extract, delete, split, reorder, merge, resize, searchable text overlays, impose (2-up, booklet). No need for separate tools like qpdf or pdftk.
 
 7. **Built-in eval fixtures** — Labelled regression fixtures for headings, formulas, tables, figures, and decorative images. Run `pdfp eval tests/eval_fixtures/` to measure quality changes over time.
 
@@ -97,7 +97,8 @@ src/
 │   ├── pages.rs        # pdfp pages (extract/delete/split/reorder/merge)
 │   ├── page_range.rs   # Page range parsing
 │   ├── impose.rs       # pdfp impose (2up/booklet)
-│   ├── resize.rs       # pdfp page resize
+│   ├── resize.rs       # pdfp page resize/crop dispatch
+│   ├── text.rs         # pdfp page text searchable overlays
 │   ├── doctor.rs       # pdfp doctor
 │   └── update.rs       # pdfp update (check/force)
 │
@@ -128,7 +129,7 @@ The reading order algorithm is a Rust port of OpenDataLoader's `XYCutPlusPlusSor
 
 ### lopdf for low-level PDF manipulation
 
-`lopdf` 0.40 is used for metadata read/write and PDF object manipulation. It operates at the raw PDF object level (dictionaries, arrays, streams, references). pdfp uses it for document information dictionary fields (title, author, subject, keywords, creator, producer, dates). The same approach works for reading annotation dictionaries and form field values.
+`lopdf` 0.40 is used for metadata read/write and PDF object manipulation. It operates at the raw PDF object level (dictionaries, arrays, streams, references). pdfp uses it for document information dictionary fields (title, author, subject, keywords, creator, producer, dates), page boxes, and searchable text-overlay content streams. The same approach works for reading annotation dictionaries and form field values.
 
 ### mupdf's pdf module (currently unused)
 

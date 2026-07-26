@@ -11,7 +11,7 @@
 - **Offline-first** — all processing is local; no cloud API calls unless you opt in
 - **Full pipeline** — extraction → layout analysis (XY-Cut++) → block classification → Markdown rendering, not just text dumping
 - **Built-in eval** — precision/recall metrics for formula detection, heading accuracy, table recall
-- **Page operations** — extract, delete, split, reorder, merge, resize, impose — all in the same tool
+- **Page operations** — extract, delete, split, reorder, merge, resize, text overlays, impose — all in the same tool
 - **Conservative mode** — `--conservative` disables speculative reconstruction for engineering/legal documents
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture and [docs/TOOL_COMPARISON.md](docs/TOOL_COMPARISON.md) for how pdfp compares to Docling, MinerU, Marker, and other tools.
@@ -32,7 +32,7 @@ Each major module has detailed documentation in [`docs/reference/`](docs/referen
 
 **In active scope:**
 - PDF input → Markdown conversion (the core workflow)
-- PDF page operations: extract, delete, split, reorder, merge, resize
+- PDF page operations: extract, delete, split, reorder, merge, resize, text overlays
 - Imposition: 2-up, booklet
 - Inspection: metadata, page geometry, scan detection, text density
 - Search: embedded text search with page reporting
@@ -102,7 +102,7 @@ pdfp search <INPUT> <TEXT> [--json] [--ocr auto|force]
 pdfp eval <FIXTURES_DIR>
 pdfp pages <extract|delete|split|reorder|merge|rotate> ...
 pdfp impose <2up|booklet> ...
-pdfp page <resize|crop> <INPUT> -o <OUTPUT>
+pdfp page <resize|crop|text> <INPUT> -o <OUTPUT>
 pdfp update [--check] [--force]
 ```
 
@@ -212,7 +212,7 @@ pdfp metadata set paper.pdf -o paper.dated.pdf \
 pdfp metadata clear paper.pdf -o paper.cleaned.pdf --fields title,author
 ```
 
-Metadata writes are Info-dictionary only. If a PDF also has XMP metadata, `pdfp` preserves it and reports a warning because XMP can still contain older values. PDFs that appear to contain signature fields are refused by default; use `--force-signed` only when you accept that writing a new file may invalidate signatures.
+Metadata writes are Info-dictionary only. If a PDF also has XMP metadata, `pdfp` preserves it and reports a warning because XMP can still contain older values. PDFs that appear to contain signature fields are refused by default; use `--force-signed` only when you accept that writing a new file may invalidate signatures. Encrypted/password-protected PDFs are refused because rewriting them could remove encryption or produce an incomplete file; decrypt a copy first, for example with `qpdf --decrypt input.pdf decrypted.pdf`.
 
 ### Evaluation
 
@@ -251,7 +251,7 @@ pdfp pages rotate input.pdf --pages 1,3 --degrees 90 -o rotated.pdf
 
 Page selections are 1-indexed and support `1`, `1-3`, comma lists, `odd`, `even`, and `all`. These commands refuse to overwrite the input path; there is no in-place editing mode yet.
 
-### Imposition and Resize
+### Imposition and Page Editing
 
 ```sh
 # Two source pages per output page
@@ -265,7 +265,16 @@ pdfp page resize input.pdf --paper a4 --fit contain -o resized.pdf
 
 # Set CropBox on selected pages (x0 y0 x1 y1, PDF points)
 pdfp page crop input.pdf --pages all --box 0 0 500 700 -o cropped.pdf
+
+# Add searchable red text 36 points from the top-left page edge
+pdfp page text input.pdf -o labelled.pdf --pages 1 \
+  --text "APPROVED" --x 36 --y 36 --origin top-left \
+  --font helvetica-bold --font-size 18 --colour '#cc0000'
 ```
+
+Text positions are baseline coordinates in PDF points. The default origin is
+the bottom-left page edge; use `--origin top-left` for top-down placement.
+Built-in Helvetica, Times, and Courier variants are available.
 
 ## Tests
 

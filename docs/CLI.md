@@ -19,6 +19,7 @@ pdfp pages rotate --help
 pdfp impose booklet --help
 pdfp page resize --help
 pdfp page crop --help
+pdfp page text --help
 ```
 
 ## Install
@@ -54,7 +55,7 @@ pdfp doctor
 | Evaluate extraction quality | `pdfp eval fixtures/` | Formula, heading, table, and image metrics |
 | Extract/delete/split/reorder/merge/rotate pages | `pdfp pages ...` | New PDF files |
 | Create 2-up or booklet layouts | `pdfp impose ...` | New PDF files |
-| Resize or crop pages | `pdfp page ...` | New PDF file |
+| Resize, crop, or add text to pages | `pdfp page ...` | New PDF file |
 
 The old shorthand still works:
 
@@ -252,7 +253,7 @@ Supported fields:
 
 Dates accept `now`, RFC3339 such as `2026-05-19T12:30:00Z`, or raw PDF date syntax such as `D:20260519123000Z` and `D:20260519123000+08'00'`. `metadata set` automatically updates `ModDate` when changing another field; add `--no-touch-mod-date` to leave it unchanged.
 
-`pdfp metadata` edits the PDF document information dictionary. If the file also has XMP metadata, the command preserves XMP and reports a warning because XMP can still contain older values. PDFs with signature fields are refused by default; `--force-signed` allows writing a new file when you accept that signatures may be invalidated.
+`pdfp metadata` edits the PDF document information dictionary. If the file also has XMP metadata, the command preserves XMP and reports a warning because XMP can still contain older values. PDFs with signature fields are refused by default; `--force-signed` allows writing a new file when you accept that signatures may be invalidated. Encrypted/password-protected PDFs are refused because rewriting them could remove encryption or produce an incomplete file; decrypt a copy first, for example with `qpdf --decrypt input.pdf decrypted.pdf`.
 
 ## Search Embedded Text
 
@@ -342,7 +343,7 @@ pdfp pages rotate input.pdf --pages 1,3 --degrees 90 -o rotated.pdf
 
 These commands write new files. They do not edit the input PDF in place.
 
-## Imposition, Resizing, and Cropping
+## Imposition and Page Editing
 
 Put two source pages onto each output page:
 
@@ -368,14 +369,43 @@ Set CropBox on selected pages:
 pdfp page crop input.pdf --pages all --box 0 0 500 700 -o cropped.pdf
 ```
 
-Supported resize/crop options:
+Add a searchable text overlay to selected pages:
+
+```sh
+pdfp page text input.pdf -o labelled.pdf \
+  --pages 1,3 \
+  --text "APPROVED" \
+  --x 36 --y 36 --origin top-left \
+  --font helvetica-bold --font-size 18 \
+  --colour '#cc0000'
+```
+
+Text positions are baseline coordinates in PDF points, relative to the active
+CropBox (or MediaBox when there is no CropBox). With the default
+`--origin bottom-left`, X grows right and Y grows up. With
+`--origin top-left`, X grows right and Y grows down. Coordinates describe the
+page user space before any page-level `/Rotate` is applied.
+
+The built-in fonts are Helvetica, Times, and Courier, including their bold and
+italic/oblique variants; run `pdfp page text --help` for the exact names. These
+standard PDF fonts support Windows-1252 text. Colours accept common names such
+as `red`, `blue`, and `gray`, or `#RGB`/`#RRGGBB`. Newlines create multiple
+lines; `--line-height` controls the baseline spacing.
+
+Supported page-editing options:
 
 | Flag | Values |
 | --- | --- |
 | `--paper` | `a4`, `letter` |
 | `--fit` | `contain`, `cover`, `stretch` |
-| `--pages` | `1`, `1-3`, `odd`, `even`, `all` for crop |
+| `--pages` | `1`, `1-3`, `odd`, `even`, `all` for crop or text |
 | `--box` | `x0 y0 x1 y1` in PDF points |
+| `--x`, `--y` | Text baseline position in PDF points |
+| `--origin` | `bottom-left`, `top-left` |
+| `--font` | Built-in Helvetica, Times, or Courier variant |
+| `--font-size` | Positive size in PDF points |
+| `--color`, `--colour` | Named colour, `#RGB`, or `#RRGGBB` |
+| `--line-height` | Optional multiline baseline spacing |
 
 ## Safety and Limits
 
@@ -383,6 +413,7 @@ Supported resize/crop options:
 - `--ocr auto` and `--ocr force` require OCRmyPDF plus Tesseract only when OCR is actually run.
 - `--hybrid docling` requires a separate Docling server.
 - Page editing and metadata write commands write new PDFs and refuse to use the input path as the output path.
+- Text overlays are appended as searchable page content. Encrypted PDFs are refused, and signed PDFs require `--force-signed` because content changes can invalidate signatures.
 - Search uses embedded PDF text unless local OCR is explicitly requested.
 - Dedicated metadata commands update Info dictionary fields only. They do not synchronize XMP packets.
 - Merge/reorder/imposition preserve page contents conservatively, but document-level metadata, outlines, forms, and annotations are not yet guaranteed.
