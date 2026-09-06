@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod clean;
 
 use self::clean::clean_markdown;
@@ -11,11 +9,11 @@ use crate::render::media::{
     build_page_media_plan, build_render_context, should_suppress_repeated_text_block, RenderContext,
 };
 use crate::render::scholarly::{is_abstract_heading, render_scholarly_first_page};
-use crate::render::table::{render_coordinate_table, render_structured_region, render_table};
-use crate::render::text::{
+use crate::render::strings::{
     append_paragraph, append_plain_text, escape_comment_attr, inline_wrap,
     normalize_front_matter_text, normalize_heading_text, normalize_paragraph_text,
 };
+use crate::render::table::{render_coordinate_table, render_structured_region, render_table};
 use std::path::{Path, PathBuf};
 
 /// The output of rendering a document — markdown text plus structured sections.

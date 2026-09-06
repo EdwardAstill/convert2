@@ -1,5 +1,5 @@
 use crate::batch;
-use crate::cli::{ConvertArgs, ConvertOptions, FigureMode};
+use crate::config::{ConvertOptions, FigureMode};
 use crate::eval::fixtures::FixtureFile;
 use crate::eval::metrics::{
     aggregate, apply_formula_debug_metrics, compute_page_metrics, DocMetrics,
@@ -30,18 +30,15 @@ fn run_one(fixture: &FixtureFile) -> DocResult {
         .to_string();
     let output_base = eval_output_base(&doc_name);
 
-    let args = ConvertArgs {
-        input: pdf_path.to_string_lossy().into_owned(),
-        options: eval_convert_options(output_base.clone()),
-    };
+    let options = eval_convert_options(output_base.clone());
 
-    let document = match process_pdf_to_document(&pdf_path, &args) {
+    let document = match process_pdf_to_document(&pdf_path, &options) {
         Ok(document) => document,
         Err(err) => {
             return DocResult {
                 doc_name,
                 metrics: DocMetrics::default(),
-                error: Some(format!("{err:#}")),
+                error: Some(format!("{:#}", anyhow::Error::from(err))),
             };
         }
     };

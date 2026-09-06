@@ -112,10 +112,13 @@ fn subprocess_sidecar_records_empty_output() {
     let sidecar = SubprocessSidecar::new(script.display().to_string());
 
     let mut result = sidecar.recognize(&crop);
-    for _ in 0..3 {
+    for _ in 0..5 {
         if result.status == FormulaSidecarStatus::EmptyOutput {
             break;
         }
+        // Brief backoff: freshly-written scripts can hit ETXTBSY on
+        // overlayfs-backed tmpfs until the write handle fully drains.
+        std::thread::sleep(Duration::from_millis(50));
         result = sidecar.recognize(&crop);
     }
 

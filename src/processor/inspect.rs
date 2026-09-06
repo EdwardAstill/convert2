@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use anyhow::Context;
-use mupdf::{Document as MuDocument, MetadataName};
 use serde::Serialize;
 
 use crate::cli::InspectArgs;
@@ -39,7 +38,7 @@ struct PageReport {
 const MIN_TEXT_AREA_FRACTION: f32 = 0.02;
 
 pub fn run(args: &InspectArgs) -> anyhow::Result<()> {
-    let prepared = ocr::prepare_pdf(&args.input, &args.ocr, args.verbose)?;
+    let prepared = ocr::prepare_pdf(&args.input, &args.ocr.clone().into_config(), args.verbose)?;
     let report = inspect_pdf(&prepared.effective_path, &args.input, prepared.decision)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -125,26 +124,6 @@ fn print_human_report(report: &InspectReport) {
     println!("scan-like: {}", report.likely_scan_like);
 }
 
-#[allow(dead_code)]
-fn metadata_from_open_document(
-    path: &Path,
-) -> anyhow::Result<(Option<String>, Option<String>, Option<String>)> {
-    let path_str = path.to_string_lossy();
-    let doc = MuDocument::open(path_str.as_ref())
-        .with_context(|| format!("Failed to open {}", path.display()))?;
-    Ok((
-        doc.metadata(MetadataName::Title)
-            .ok()
-            .filter(|s| !s.is_empty()),
-        doc.metadata(MetadataName::Author)
-            .ok()
-            .filter(|s| !s.is_empty()),
-        doc.metadata(MetadataName::Subject)
-            .ok()
-            .filter(|s| !s.is_empty()),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,7 +140,7 @@ mod tests {
             image_only_pages: 1,
             low_density_pages: 1,
             likely_scan_like: true,
-            ocr: OcrDecision::off(Path::new("x.pdf"), &crate::cli::OcrOptions::default()),
+            ocr: OcrDecision::off(Path::new("x.pdf"), &crate::config::OcrOptions::default()),
             pages: Vec::new(),
         };
         assert!(report.likely_scan_like);

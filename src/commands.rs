@@ -1,8 +1,10 @@
-use anyhow::Context;
+use crate::batch::{self, is_pdf};
 use std::path::Path;
 
-use crate::batch;
-use crate::cli::{is_pdf, AppCommand, ConvertArgs};
+use anyhow::Context;
+
+use crate::cli::{AppCommand, ConvertArgs};
+use crate::config;
 use crate::pipeline;
 use crate::processor;
 
@@ -62,25 +64,23 @@ fn run_convert(args: ConvertArgs) -> anyhow::Result<()> {
     let inputs = batch::resolve_inputs(&args.input)
         .with_context(|| format!("Failed to resolve input '{}'", args.input))?;
 
-    if args.options.verbose {
+    let mut options = args.options.into_config();
+    options.batch_mode = inputs.len() > 1;
+
+    if options.verbose {
         eprintln!("Processing {} PDF file(s)", inputs.len());
     }
 
-    let batch_mode = inputs.len() > 1;
     let results: Vec<(std::path::PathBuf, anyhow::Result<()>)> = inputs
         .iter()
-        .map(|path| {
-            let mut per_file_args = args.clone();
-            per_file_args.options.batch_mode = batch_mode;
-            (path.clone(), process_one(path, &per_file_args))
-        })
+        .map(|path| (path.clone(), process_one(path, &options)))
         .collect();
 
     let mut had_errors = false;
     for (path, result) in &results {
         match result {
             Ok(()) => {
-                if args.options.verbose {
+                if options.verbose {
                     eprintln!("  ok: {}", path.display());
                 }
             }
@@ -98,9 +98,9 @@ fn run_convert(args: ConvertArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn process_one(path: &Path, _args: &ConvertArgs) -> anyhow::Result<()> {
+fn process_one(path: &Path, options: &config::ConvertOptions) -> anyhow::Result<()> {
     if !is_pdf(path) {
         anyhow::bail!("Unsupported file type: {}", path.display());
     }
-    pipeline::process_pdf(path, _args)
+    Ok(pipeline::process_pdf(path, options)?)
 }

@@ -1,7 +1,17 @@
-use crate::cli::SUPPORTED_EXTENSIONS;
 use crate::error::{PdfpError, PdfpResult};
 use glob::glob;
 use std::path::{Path, PathBuf};
+
+/// All file extensions that pdfp supports.
+pub const SUPPORTED_EXTENSIONS: &[&str] = &["pdf"];
+
+/// Check whether a file path has a supported PDF extension.
+pub fn is_pdf(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("pdf"))
+        .unwrap_or(false)
+}
 
 /// Check if a file has a supported extension.
 fn is_supported(path: &Path) -> bool {

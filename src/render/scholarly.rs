@@ -2,7 +2,7 @@
 
 use crate::document::types::{Block, BlockKind, Page};
 use crate::render::media::PageMediaPlan;
-use crate::render::text::{
+use crate::render::strings::{
     append_paragraph, append_plain_text, normalize_front_matter_text, normalize_heading_text,
 };
 use regex::Regex;

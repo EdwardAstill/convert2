@@ -1,7 +1,15 @@
+//! Clap CLI definitions for pdfp.
+//!
+//! This module owns argument *parsing* only. Every conversion-related value
+//! defined here is converted into the CLI-free types in [`crate::config`]
+//! (see [`ConvertOptions::into_config`]); the pipeline, layout, and OCR
+//! modules depend on `config`, never on this module.
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-use crate::render::markdown::MarkdownStyle as RenderMarkdownStyle;
+use crate::config;
+use crate::render::markdown::MarkdownStyle;
 
 #[derive(Parser, Debug)]
 #[command(name = "pdfp", about = "Local PDF processor", version)]
@@ -95,7 +103,7 @@ pub struct ConvertOptions {
 
     /// Figure/image output mode for markdown conversion
     #[arg(long, value_enum, hide = true)]
-    pub figures: Option<FigureMode>,
+    pub figures: Option<FigureModeArg>,
 
     /// Resolution for rendered figure snapshots
     #[arg(long, default_value = "200", hide = true)]
@@ -115,7 +123,7 @@ pub struct ConvertOptions {
 
     /// Table extraction mode for markdown conversion.
     #[arg(long = "table-mode", value_enum, default_value = "auto", hide = true)]
-    pub table_mode: TableMode,
+    pub table_mode: TableModeArg,
 
     /// Write table detection debug JSON under debug/tables/
     #[arg(long, hide = true)]
@@ -127,7 +135,7 @@ pub struct ConvertOptions {
 
     /// Formula handling mode for markdown conversion
     #[arg(long, value_enum, default_value = "auto", hide = true)]
-    pub formulas: FormulaMode,
+    pub formulas: FormulaModeArg,
 
     /// Write formula detection debug JSON and crops under debug/formulas/
     #[arg(long, hide = true)]
@@ -143,7 +151,7 @@ pub struct ConvertOptions {
 
     /// Formula emission policy for detected/recovered candidates.
     #[arg(long = "formula-emit", value_enum, default_value = "auto", hide = true)]
-    pub formula_emit: FormulaEmitMode,
+    pub formula_emit: FormulaEmitModeArg,
 
     /// Optional 1-indexed page range to convert, e.g. `1-3,9`.
     #[arg(long)]
@@ -157,7 +165,7 @@ pub struct ConvertOptions {
     /// (LaTeX formulas, complex tables, OCR). `off` (default) = fully local;
     /// `docling` = POST the whole PDF to a running `docling-serve` instance.
     #[arg(long, value_enum, default_value = "off", hide = true)]
-    pub hybrid: HybridMode,
+    pub hybrid: HybridModeArg,
 
     /// Base URL of the hybrid backend (docling-serve). Only used when
     /// `--hybrid` is not `off`.
@@ -174,7 +182,7 @@ pub struct ConvertOptions {
     /// text density — only formula-/table-/scan-heavy pages pay the
     /// backend cost. `all` routes every page (useful for testing).
     #[arg(long, value_enum, default_value = "auto", hide = true)]
-    pub hybrid_policy: HybridPolicy,
+    pub hybrid_policy: HybridPolicyArg,
 
     /// Optional directory for cached hybrid markdown, keyed by source PDF
     /// metadata and page number.
@@ -186,6 +194,80 @@ pub struct ConvertOptions {
 
     #[arg(skip)]
     pub batch_mode: bool,
+}
+
+impl ConvertOptions {
+    /// Convert the clap argument struct into the CLI-free
+    /// [`config::ConvertOptions`] consumed by the pipeline.
+    pub fn into_config(self) -> config::ConvertOptions {
+        config::ConvertOptions {
+            output: self.output,
+            min_h_gap: self.min_h_gap,
+            min_v_gap: self.min_v_gap,
+            images: self.images,
+            no_images: self.no_images,
+            conservative: self.conservative,
+            markdown_style: self.markdown_style.into(),
+            figures: self.figures.map(config::FigureMode::from),
+            figure_dpi: self.figure_dpi,
+            figure_padding: self.figure_padding,
+            debug_figures: self.debug_figures,
+            tables: self.tables,
+            table_mode: self.table_mode.into(),
+            debug_tables: self.debug_tables,
+            equations: self.equations,
+            formulas: self.formulas.into(),
+            debug_formulas: self.debug_formulas,
+            formula_sidecar: self.formula_sidecar,
+            formula_sidecar_timeout_secs: self.formula_sidecar_timeout_secs,
+            formula_emit: self.formula_emit.into(),
+            pages: self.pages,
+            verbose: self.verbose,
+            hybrid: self.hybrid.into(),
+            hybrid_url: self.hybrid_url,
+            hybrid_timeout_secs: self.hybrid_timeout_secs,
+            hybrid_policy: self.hybrid_policy.into(),
+            hybrid_cache_dir: self.hybrid_cache_dir,
+            ocr: self.ocr.into_config(),
+            batch_mode: self.batch_mode,
+        }
+    }
+}
+
+impl Default for ConvertOptions {
+    fn default() -> Self {
+        Self {
+            output: None,
+            min_h_gap: 8.0,
+            min_v_gap: 12.0,
+            images: false,
+            no_images: false,
+            conservative: false,
+            markdown_style: MarkdownStyleArg::Clean,
+            figures: None,
+            figure_dpi: 200,
+            figure_padding: 8.0,
+            debug_figures: false,
+            tables: false,
+            table_mode: TableModeArg::Auto,
+            debug_tables: false,
+            equations: false,
+            formulas: FormulaModeArg::Auto,
+            debug_formulas: false,
+            formula_sidecar: None,
+            formula_sidecar_timeout_secs: 30,
+            formula_emit: FormulaEmitModeArg::Auto,
+            pages: None,
+            verbose: false,
+            hybrid: HybridModeArg::Off,
+            hybrid_url: "http://localhost:5001".to_string(),
+            hybrid_timeout_secs: 600,
+            hybrid_policy: HybridPolicyArg::Auto,
+            hybrid_cache_dir: None,
+            ocr: OcrOptions::default(),
+            batch_mode: false,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -699,12 +781,14 @@ pub enum AppCommand {
     Update(UpdateArgs),
 }
 
+/// Clap definition for OCR preprocessing options (flattened into convert,
+/// inspect, and search commands).
 #[derive(Args, Debug, Clone)]
 pub struct OcrOptions {
     /// OCR preprocessing mode. `auto` OCRs scan-heavy PDFs only; `force`
     /// OCRs regardless of readable text; `off` skips OCR.
     #[arg(long, value_enum, default_value = "auto")]
-    pub ocr: OcrMode,
+    pub ocr: OcrModeArg,
 
     /// OCR language(s), passed to OCRmyPDF/Tesseract, e.g. `eng` or `eng+deu`.
     #[arg(long = "lang", alias = "ocr-lang", default_value = "eng")]
@@ -723,10 +807,23 @@ pub struct OcrOptions {
     pub ocr_command: PathBuf,
 }
 
+impl OcrOptions {
+    /// Convert into the CLI-free [`config::OcrOptions`].
+    pub fn into_config(self) -> config::OcrOptions {
+        config::OcrOptions {
+            ocr: self.ocr.into(),
+            ocr_lang: self.ocr_lang,
+            ocr_cache_dir: self.ocr_cache_dir,
+            ocr_timeout_secs: self.ocr_timeout_secs,
+            ocr_command: self.ocr_command,
+        }
+    }
+}
+
 impl Default for OcrOptions {
     fn default() -> Self {
         Self {
-            ocr: OcrMode::Auto,
+            ocr: OcrModeArg::Auto,
             ocr_lang: "eng".to_string(),
             ocr_cache_dir: None,
             ocr_timeout_secs: 600,
@@ -736,14 +833,24 @@ impl Default for OcrOptions {
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OcrMode {
+pub enum OcrModeArg {
     Off,
     Auto,
     Force,
 }
 
+impl From<OcrModeArg> for config::OcrMode {
+    fn from(mode: OcrModeArg) -> Self {
+        match mode {
+            OcrModeArg::Off => config::OcrMode::Off,
+            OcrModeArg::Auto => config::OcrMode::Auto,
+            OcrModeArg::Force => config::OcrMode::Force,
+        }
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FigureMode {
+pub enum FigureModeArg {
     /// Current behavior: extract embedded raster image objects
     Embedded,
     /// Render complete detected figure regions as page snapshots
@@ -754,8 +861,19 @@ pub enum FigureMode {
     None,
 }
 
+impl From<FigureModeArg> for config::FigureMode {
+    fn from(mode: FigureModeArg) -> Self {
+        match mode {
+            FigureModeArg::Embedded => config::FigureMode::Embedded,
+            FigureModeArg::Snapshot => config::FigureMode::Snapshot,
+            FigureModeArg::Both => config::FigureMode::Both,
+            FigureModeArg::None => config::FigureMode::None,
+        }
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TableMode {
+pub enum TableModeArg {
     /// Detect tables automatically; emit Markdown when confident, layout text otherwise
     Auto,
     /// Force native coordinate-derived Markdown tables
@@ -766,8 +884,19 @@ pub enum TableMode {
     Off,
 }
 
+impl From<TableModeArg> for config::TableMode {
+    fn from(mode: TableModeArg) -> Self {
+        match mode {
+            TableModeArg::Auto => config::TableMode::Auto,
+            TableModeArg::Native => config::TableMode::Native,
+            TableModeArg::Layout => config::TableMode::Layout,
+            TableModeArg::Off => config::TableMode::Off,
+        }
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormulaMode {
+pub enum FormulaModeArg {
     /// Detect formula candidates for warnings and debug audit files
     Auto,
     /// Force local formula candidate detection and rendering
@@ -778,8 +907,19 @@ pub enum FormulaMode {
     Off,
 }
 
+impl From<FormulaModeArg> for config::FormulaMode {
+    fn from(mode: FormulaModeArg) -> Self {
+        match mode {
+            FormulaModeArg::Auto => config::FormulaMode::Auto,
+            FormulaModeArg::Local => config::FormulaMode::Local,
+            FormulaModeArg::Hybrid => config::FormulaMode::Hybrid,
+            FormulaModeArg::Off => config::FormulaMode::Off,
+        }
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormulaEmitMode {
+pub enum FormulaEmitModeArg {
     /// Emit only candidates that pass conservative safety gates.
     Conservative,
     /// Emit high-confidence local candidates and recovered sidecar LaTeX.
@@ -790,26 +930,60 @@ pub enum FormulaEmitMode {
     None,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FormulaSidecarArg {
-    Command(String),
-    #[cfg(feature = "onnx-ocr")]
-    Onnx(PathBuf),
+impl From<FormulaEmitModeArg> for config::FormulaEmitMode {
+    fn from(mode: FormulaEmitModeArg) -> Self {
+        match mode {
+            FormulaEmitModeArg::Conservative => config::FormulaEmitMode::Conservative,
+            FormulaEmitModeArg::Auto => config::FormulaEmitMode::Auto,
+            FormulaEmitModeArg::All => config::FormulaEmitMode::All,
+            FormulaEmitModeArg::None => config::FormulaEmitMode::None,
+        }
+    }
 }
 
-pub fn parse_formula_sidecar(value: &str) -> anyhow::Result<FormulaSidecarArg> {
-    #[cfg(feature = "onnx-ocr")]
-    if let Some(model_dir) = value.strip_prefix("onnx:") {
-        return Ok(FormulaSidecarArg::Onnx(PathBuf::from(model_dir)));
-    }
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridModeArg {
+    Off,
+    Docling,
+}
 
-    #[cfg(not(feature = "onnx-ocr"))]
-    if value.starts_with("onnx:") {
-        anyhow::bail!("onnx formula sidecar requires a binary built with --features onnx-ocr");
+impl From<HybridModeArg> for config::HybridMode {
+    fn from(mode: HybridModeArg) -> Self {
+        match mode {
+            HybridModeArg::Off => config::HybridMode::Off,
+            HybridModeArg::Docling => config::HybridMode::Docling,
+        }
     }
+}
 
-    let command = value.strip_prefix("cmd:").unwrap_or(value);
-    Ok(FormulaSidecarArg::Command(command.to_string()))
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridPolicyArg {
+    Auto,
+    All,
+}
+
+impl From<HybridPolicyArg> for config::HybridPolicy {
+    fn from(policy: HybridPolicyArg) -> Self {
+        match policy {
+            HybridPolicyArg::Auto => config::HybridPolicy::Auto,
+            HybridPolicyArg::All => config::HybridPolicy::All,
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandaloneOcrMode {
+    Auto,
+    Force,
+}
+
+impl From<StandaloneOcrMode> for config::OcrMode {
+    fn from(mode: StandaloneOcrMode) -> Self {
+        match mode {
+            StandaloneOcrMode::Auto => config::OcrMode::Auto,
+            StandaloneOcrMode::Force => config::OcrMode::Force,
+        }
+    }
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -822,230 +996,46 @@ pub enum MarkdownStyleArg {
     Review,
 }
 
-impl From<MarkdownStyleArg> for RenderMarkdownStyle {
+impl From<MarkdownStyleArg> for MarkdownStyle {
     fn from(style: MarkdownStyleArg) -> Self {
         match style {
-            MarkdownStyleArg::Faithful => RenderMarkdownStyle::Faithful,
-            MarkdownStyleArg::Clean => RenderMarkdownStyle::Clean,
-            MarkdownStyleArg::Review => RenderMarkdownStyle::Review,
+            MarkdownStyleArg::Faithful => MarkdownStyle::Faithful,
+            MarkdownStyleArg::Clean => MarkdownStyle::Clean,
+            MarkdownStyleArg::Review => MarkdownStyle::Review,
         }
     }
-}
-
-impl ConvertOptions {
-    pub fn review_safe_profile(&self) -> bool {
-        self.conservative || matches!(self.markdown_style, MarkdownStyleArg::Review)
-    }
-
-    pub fn effective_figure_mode(&self) -> FigureMode {
-        if self.review_safe_profile() {
-            FigureMode::Embedded
-        } else {
-            self.figures.unwrap_or(FigureMode::Snapshot)
-        }
-    }
-
-    pub fn effective_image_output(&self) -> bool {
-        !self.no_images
-            && !matches!(self.figures, Some(FigureMode::None))
-            && (self.images || self.figures.is_some())
-    }
-
-    pub fn effective_table_mode(&self) -> TableMode {
-        if self.review_safe_profile() {
-            TableMode::Layout
-        } else {
-            self.table_mode
-        }
-    }
-
-    pub fn export_table_images(&self) -> bool {
-        self.tables && !matches!(self.effective_table_mode(), TableMode::Off)
-    }
-
-    pub fn export_equation_images(&self) -> bool {
-        self.equations
-    }
-
-    pub fn effective_formula_mode(&self) -> FormulaMode {
-        if self.review_safe_profile() {
-            FormulaMode::Auto
-        } else {
-            self.formulas
-        }
-    }
-
-    pub fn effective_render_math(&self) -> bool {
-        !self.review_safe_profile()
-    }
-
-    pub fn effective_markdown_style(&self) -> RenderMarkdownStyle {
-        self.markdown_style.into()
-    }
-}
-
-impl Default for ConvertOptions {
-    fn default() -> Self {
-        Self {
-            output: None,
-            min_h_gap: 8.0,
-            min_v_gap: 12.0,
-            images: false,
-            no_images: false,
-            conservative: false,
-            markdown_style: MarkdownStyleArg::Clean,
-            figures: None,
-            figure_dpi: 200,
-            figure_padding: 8.0,
-            debug_figures: false,
-            tables: false,
-            table_mode: TableMode::Auto,
-            debug_tables: false,
-            equations: false,
-            formulas: FormulaMode::Auto,
-            debug_formulas: false,
-            formula_sidecar: None,
-            formula_sidecar_timeout_secs: 30,
-            formula_emit: FormulaEmitMode::Auto,
-            pages: None,
-            verbose: false,
-            hybrid: HybridMode::Off,
-            hybrid_url: "http://localhost:5001".to_string(),
-            hybrid_timeout_secs: 600,
-            hybrid_policy: HybridPolicy::Auto,
-            hybrid_cache_dir: None,
-            ocr: OcrOptions::default(),
-            batch_mode: false,
-        }
-    }
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StandaloneOcrMode {
-    Auto,
-    Force,
-}
-
-impl From<StandaloneOcrMode> for OcrMode {
-    fn from(mode: StandaloneOcrMode) -> Self {
-        match mode {
-            StandaloneOcrMode::Auto => OcrMode::Auto,
-            StandaloneOcrMode::Force => OcrMode::Force,
-        }
-    }
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HybridPolicy {
-    Auto,
-    All,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn convert_options(conservative: bool) -> ConvertOptions {
-        ConvertOptions {
-            output: None,
-            min_h_gap: 8.0,
-            min_v_gap: 12.0,
+    #[test]
+    fn into_config_maps_all_fields() {
+        let options = ConvertOptions {
             images: true,
-            no_images: false,
-            conservative,
-            markdown_style: MarkdownStyleArg::Clean,
-            figures: Some(FigureMode::Snapshot),
-            figure_dpi: 200,
-            figure_padding: 8.0,
-            debug_figures: false,
             tables: true,
-            table_mode: TableMode::Native,
-            debug_tables: false,
-            equations: false,
-            formulas: FormulaMode::Local,
-            debug_formulas: false,
-            formula_sidecar: None,
-            formula_sidecar_timeout_secs: 30,
-            formula_emit: FormulaEmitMode::Auto,
-            pages: None,
-            verbose: false,
-            hybrid: HybridMode::Off,
-            hybrid_url: "http://localhost:5001".to_string(),
-            hybrid_timeout_secs: 600,
-            hybrid_policy: HybridPolicy::Auto,
-            hybrid_cache_dir: None,
-            ocr: OcrOptions::default(),
-            batch_mode: false,
-        }
+            formulas: FormulaModeArg::Local,
+            figures: Some(FigureModeArg::Snapshot),
+            table_mode: TableModeArg::Native,
+            formula_emit: FormulaEmitModeArg::All,
+            hybrid: HybridModeArg::Docling,
+            hybrid_policy: HybridPolicyArg::All,
+            markdown_style: MarkdownStyleArg::Review,
+            ..ConvertOptions::default()
+        };
+
+        let config = options.into_config();
+        assert!(config.images);
+        assert!(config.tables);
+        assert_eq!(config.formulas, config::FormulaMode::Local);
+        assert_eq!(config.figures, Some(config::FigureMode::Snapshot));
+        assert_eq!(config.table_mode, config::TableMode::Native);
+        assert_eq!(config.formula_emit, config::FormulaEmitMode::All);
+        assert_eq!(config.hybrid, config::HybridMode::Docling);
+        assert!(config.hybrid.is_on());
+        assert_eq!(config.hybrid_policy, config::HybridPolicy::All);
+        assert_eq!(config.markdown_style, MarkdownStyle::Review);
+        assert!(config.review_safe_profile());
     }
-
-    #[test]
-    fn default_markdown_style_is_clean() {
-        assert_eq!(
-            ConvertOptions::default().markdown_style,
-            MarkdownStyleArg::Clean
-        );
-    }
-
-    #[test]
-    fn conservative_mode_uses_review_safe_conversion_modes() {
-        let options = convert_options(true);
-
-        assert_eq!(options.effective_figure_mode(), FigureMode::Embedded);
-        assert_eq!(options.effective_table_mode(), TableMode::Layout);
-        assert_eq!(options.effective_formula_mode(), FormulaMode::Auto);
-    }
-
-    #[test]
-    fn non_conservative_mode_preserves_selected_conversion_modes() {
-        let options = convert_options(false);
-
-        assert_eq!(options.effective_figure_mode(), FigureMode::Snapshot);
-        assert_eq!(options.effective_table_mode(), TableMode::Native);
-        assert_eq!(options.effective_formula_mode(), FormulaMode::Local);
-    }
-
-    #[test]
-    fn review_style_uses_review_safe_conversion_modes() {
-        let mut options = convert_options(false);
-        options.markdown_style = MarkdownStyleArg::Review;
-
-        assert_eq!(options.effective_figure_mode(), FigureMode::Embedded);
-        assert_eq!(options.effective_table_mode(), TableMode::Layout);
-        assert_eq!(options.effective_formula_mode(), FormulaMode::Auto);
-        assert!(!options.effective_render_math());
-    }
-
-    #[test]
-    fn clean_style_keeps_selected_table_mode_without_disabling_math_rendering() {
-        let mut options = convert_options(false);
-        options.markdown_style = MarkdownStyleArg::Clean;
-        options.table_mode = TableMode::Layout;
-
-        assert_eq!(options.effective_table_mode(), TableMode::Layout);
-        assert!(options.effective_render_math());
-    }
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HybridMode {
-    Off,
-    Docling,
-}
-
-impl HybridMode {
-    pub fn is_on(self) -> bool {
-        !matches!(self, HybridMode::Off)
-    }
-}
-
-/// All file extensions that pdfp supports.
-pub const SUPPORTED_EXTENSIONS: &[&str] = &["pdf"];
-
-/// Check whether a file path has a supported PDF extension.
-pub fn is_pdf(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("pdf"))
-        .unwrap_or(false)
 }

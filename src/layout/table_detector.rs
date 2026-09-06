@@ -33,7 +33,6 @@ struct GeometryRegion {
 }
 
 /// Returns bounding boxes of candidate table regions.
-#[allow(dead_code)]
 pub fn detect_table_regions(
     hlines: &[HLine],
     vlines: &[VLine],

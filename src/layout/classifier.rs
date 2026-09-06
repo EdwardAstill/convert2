@@ -210,13 +210,11 @@ impl Classifier {
         }
     }
 
-    #[allow(dead_code)]
     pub fn with_config(config: ClassifierConfig) -> Self {
         Self { config }
     }
 
     /// Classify all blocks on a page, returning `Block`s with `BlockKind` assigned.
-    #[allow(dead_code)]
     pub fn classify_page(&self, raw_blocks: Vec<RawTextBlock>, page: &RawPage) -> Vec<Block> {
         self.classify_page_with_metadata(raw_blocks, page, None)
     }
@@ -269,7 +267,7 @@ impl Classifier {
         self.split_leading_heading_blocks(blocks)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn classify_block(&self, block: &RawTextBlock, page: &RawPage) -> BlockKind {
         self.classify_block_with_metadata(block, page, None)
     }

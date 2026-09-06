@@ -1,5 +1,7 @@
 pub mod batch;
 pub mod cli;
+pub mod commands;
+pub mod config;
 pub mod document;
 pub mod error;
 pub mod eval;

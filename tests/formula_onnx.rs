@@ -108,7 +108,7 @@ mod onnx_tests {
 
 #[cfg(feature = "onnx-ocr")]
 mod cli_tests {
-    use pdf_processor::cli::{parse_formula_sidecar, FormulaSidecarArg};
+    use pdf_processor::config::{parse_formula_sidecar, FormulaSidecarArg};
 
     #[test]
     fn onnx_prefix_parses_to_model_dir() {

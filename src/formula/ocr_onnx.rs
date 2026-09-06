@@ -65,7 +65,6 @@ impl OnnxFormulaSidecar {
         })
     }
 
-    #[allow(dead_code)]
     #[doc(hidden)]
     pub fn from_parts_for_test(vocab: Vec<String>) -> Self {
         Self {
@@ -154,6 +153,7 @@ impl FormulaSidecar for OnnxFormulaSidecar {
                 duration_ms: Some(elapsed_ms(start)),
                 stderr: None,
                 error: None,
+                sanity: None,
             },
             Ok(None) => FormulaSidecarAttempt {
                 status: FormulaSidecarStatus::EmptyOutput,
@@ -162,6 +162,7 @@ impl FormulaSidecar for OnnxFormulaSidecar {
                 duration_ms: Some(elapsed_ms(start)),
                 stderr: None,
                 error: None,
+                sanity: None,
             },
             Err(err) => FormulaSidecarAttempt {
                 status: FormulaSidecarStatus::CommandFailed,
@@ -170,6 +171,7 @@ impl FormulaSidecar for OnnxFormulaSidecar {
                 duration_ms: Some(elapsed_ms(start)),
                 stderr: None,
                 error: Some(err.to_string()),
+                sanity: None,
             },
         }
     }

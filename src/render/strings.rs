@@ -1,4 +1,4 @@
-//! Text normalization and Markdown string helpers.
+//! String normalization, escaping, and Markdown text helpers.
 
 pub(crate) fn escape_comment_attr(value: &str) -> String {
     value

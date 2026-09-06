@@ -47,7 +47,6 @@ pub struct FormulaCandidate {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[allow(dead_code)]
 pub enum FormulaStatus {
     LocalCandidate,
     NeedsReview,

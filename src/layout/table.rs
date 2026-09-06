@@ -1,13 +1,18 @@
-use crate::cli::TableMode;
+use crate::config::TableMode;
 use crate::document::types::{Bbox, BlockKind, DetectedTable, RawTextBlock, RawWord, TableRender};
 use regex::Regex;
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum TableDetectionStrategy {
+    /// Ruled-line grid detection. Not selected by the production classifier
+    /// yet; exercised by unit tests. Kept for future parity with the
+    /// reference detector.
+    #[allow(dead_code)]
     LineGrid,
     TextAlignment,
+    /// Explicit region-based detection. Same status as `LineGrid`.
+    #[allow(dead_code)]
     ExplicitRegion,
 }
 
@@ -451,13 +456,15 @@ pub(crate) struct TableCandidate {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
-#[allow(dead_code)]
 pub(crate) enum TableEvidenceSource {
     RulingGrid,
     RulingBand,
     TextAlignment,
     NumericRows,
     ExplicitRegion,
+    /// Reserved for an external table model backend. Not produced by any
+    /// detection path yet; kept so evidence weights cover the full enum.
+    #[allow(dead_code)]
     ExternalModel,
 }
 

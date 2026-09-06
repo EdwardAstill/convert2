@@ -22,11 +22,12 @@ pdfp holds a unique position among PDF tools. These are the things that make it 
 
 ```
 src/
-├── main.rs             # Entry point, dispatches to commands
+├── main.rs             # Thin entry point: parse CLI, dispatch into the lib
 ├── lib.rs              # Library root
-├── cli.rs              # Clap CLI definition (commands, args, options)
+├── cli.rs              # Clap CLI definitions only; converts args → config
+├── config.rs           # CLI-free conversion config (ConvertOptions, modes)
 ├── commands.rs         # Command dispatch (match AppCommand → processor)
-├── batch.rs            # Input resolution (file/dir/glob → Vec<PathBuf>)
+├── batch.rs            # Input resolution (file/dir/glob → Vec<PathBuf>), is_pdf
 ├── error.rs            # PdfpError enum + PdfpResult<T> type alias
 │
 ├── document/           # Shared types
@@ -63,7 +64,11 @@ src/
 │   └── render.rs       # Figure snapshot rendering
 │
 ├── pipeline/           # PDF → Document pipeline glue
-│   ├── mod.rs          # Main pipeline: extract → classify → detect → merge → write
+│   ├── mod.rs          # Orchestrator: extract → select → per-page build → write
+│   ├── formulas.rs     # Formula stage: sidecar, emission decisions, LaTeX recovery
+│   ├── tables.rs       # Table stage: candidates → blocks, geometry detection, debug
+│   ├── media.rs        # Media stage: figure debug output, image persistence
+│   ├── routing.rs      # Routing stage: scan warnings, hybrid backend dispatch
 │   └── merge.rs        # Block suppression and media merge helpers
 │
 ├── render/             # Markdown output
@@ -72,11 +77,10 @@ src/
 │   ├── table.rs        # Markdown table, numeric-table, and form-field rendering
 │   ├── scholarly.rs    # Scholarly front-matter rendering
 │   ├── media.rs        # Image/figure dedup plan
-│   └── text.rs         # Table cell escaping
+│   └── strings.rs      # Text normalization, escaping, heading text cleanup
 │
 ├── formats/            # Output format writers
-│   ├── mod.rs
-│   └── raw/mod.rs      # Single .md output
+│   └── mod.rs          # RawFormat: single .md output + image copies
 │
 ├── hybrid/             # Docling hybrid backend
 │   ├── mod.rs          # Orchestration, routing policy
@@ -114,6 +118,7 @@ src/
 ### MuPDF as the rendering engine
 
 pdfp uses MuPDF (AGPL) via the `mupdf` 0.6 crate. MuPDF was chosen because:
+
 - It's the fastest PDF renderer
 - It bundles as C source, compiled via `cc` — no system library dependency
 - It handles text extraction, image extraction, and page rendering
@@ -134,6 +139,7 @@ The reading order algorithm is a Rust port of OpenDataLoader's `XYCutPlusPlusSor
 ### mupdf's pdf module (currently unused)
 
 mupdf 0.6 exposes a rich `pdf` sub-module (`PdfDocument`, `PdfPage`, `PdfAnnotation`, `PdfWriteOptions`) that pdfp does not currently use. This module provides:
+
 - Outline/bookmark extraction
 - Annotation enumeration and creation
 - Page rotation, crop box, media box
@@ -147,7 +153,11 @@ MuPDF uses `Rect { x0, y0, x1, y1 }` — corner coordinates, not `(x, y, w, h)`.
 
 ### Error types
 
-`PdfpError` (formerly `VtvError`) is the library error type using `thiserror`. `PdfpResult<T>` is the convenience alias. CLI commands use `anyhow::Result` at the outermost level and convert from `PdfpError` where needed.
+`PdfpError` is the library error type using `thiserror`; `PdfpResult<T>` is the convenience alias. Library entry points (`pipeline::process_pdf`, `pipeline::process_pdf_to_document`, `pdf::extractor::PdfExtractor`, `formats::RawFormat`) return `PdfpResult`. Matchable variants exist for known conditions: `PdfOpen`, `PdfExtraction`, `Io`, `InvalidInput`, `PasswordProtected` (raised by `PdfExtractor::open_document` when a PDF needs a password), and `HybridBackend`. Internal stage errors are carried transparently in `PdfpError::Other(#[from] anyhow::Error)` so `format!("{:#}", ...)` preserves the full diagnostic chain. CLI commands use `anyhow::Result` at the outermost level and convert from `PdfpError` automatically.
+
+### Config layer
+
+`src/config.rs` holds the CLI-free conversion configuration (`ConvertOptions`, the mode enums, and the `effective_*` preset-resolution helpers). `cli.rs` owns clap parsing only and converts its argument structs into config types via `ConvertOptions::into_config()`. The pipeline, layout, and OCR modules depend on `config`, never on `cli`, so the library is usable without the CLI layer.
 
 ### `<!-- page:N -->` markers
 
@@ -156,6 +166,7 @@ The `MarkdownRenderer` emits page markers (1-indexed) consumed by `split_into_se
 ### Heading level derivation
 
 Heading levels are derived from font size ratio against the body text mode:
+>
 - >=2.0× body → H1
 - >=1.6× body → H2
 - >=1.35× body → H3

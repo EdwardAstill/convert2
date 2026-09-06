@@ -38,7 +38,7 @@ struct PointReport {
 }
 
 pub fn run(args: &SearchArgs) -> anyhow::Result<()> {
-    let prepared = ocr::prepare_pdf(&args.input, &args.ocr, args.verbose)?;
+    let prepared = ocr::prepare_pdf(&args.input, &args.ocr.clone().into_config(), args.verbose)?;
     let report = search_pdf(
         &prepared.effective_path,
         &args.input,

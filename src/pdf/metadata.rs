@@ -23,7 +23,6 @@ use crate::document::types::Bbox;
 /// Not every field is consulted by the current classifier — `family` and
 /// `italic` are surfaced for future heuristics and for debugging. They are
 /// populated by the real loader but tolerated as dead in the default build.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct FontInfo {
     /// Font family name (e.g. "TimesNewRomanPSMT", "Helvetica-Bold").
@@ -45,7 +44,6 @@ impl FontInfo {
 /// drawn. `mcids` exposes the marked-content ids used to derive the region.
 /// `alt` and `actual_text` hold `/Alt` and `/ActualText` when Pdfium exposes
 /// them, which format writers may surface in the future.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct StructTag {
     pub bbox: Bbox,
@@ -470,8 +468,10 @@ mod pdfium_impl {
 
     fn decode_utf16le_nul(buffer: &[u8]) -> Option<String> {
         let mut units: Vec<u16> = buffer
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_le_bytes(*chunk))
             .collect();
         while units.last().copied() == Some(0) {
             units.pop();

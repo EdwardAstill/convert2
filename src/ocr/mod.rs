@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context};
 use serde::Serialize;
 
-use crate::cli::{OcrMode, OcrOptions};
+use crate::config::{OcrMode, OcrOptions};
 use crate::pdf::extractor::PdfExtractor;
 
 pub mod triage;

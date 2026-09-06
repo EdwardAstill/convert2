@@ -1,25 +1,8 @@
-mod batch;
-mod cli;
-mod commands;
-mod document;
-mod error;
-mod eval;
-mod figure;
-mod formats;
-mod formula;
-mod hybrid;
-mod layout;
-mod ocr;
-mod pdf;
-mod pipeline;
-mod processor;
-mod render;
-
 use clap::Parser;
 
-use cli::Cli;
+use pdf_processor::cli::Cli;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    commands::run(cli.into_command()?)
+    pdf_processor::commands::run(cli.into_command()?)
 }

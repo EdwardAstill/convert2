@@ -3,7 +3,7 @@ use crate::layout::table_inference::{
     looks_like_key_value_label, normalize_field_label, normalize_field_value, FormField,
     ParsedNumericRow, StructuredRegion, StructuredRegionKind,
 };
-use crate::render::text::escape_table_cell;
+use crate::render::strings::escape_table_cell;
 
 pub(crate) fn render_table(blocks: &[&Block]) -> String {
     let (grid, max_col) = build_table_grid(blocks);

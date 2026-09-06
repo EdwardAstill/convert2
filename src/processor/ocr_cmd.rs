@@ -1,4 +1,5 @@
-use crate::cli::{OcrArgs, OcrOptions};
+use crate::cli::OcrArgs;
+use crate::config::OcrOptions;
 use crate::ocr;
 
 pub fn run(args: &OcrArgs) -> anyhow::Result<()> {

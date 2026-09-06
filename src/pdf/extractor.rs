@@ -16,7 +16,6 @@ pub struct PdfExtractor;
 
 impl PdfExtractor {
     /// Extract all pages from a PDF file.
-    #[allow(dead_code)]
     pub fn extract_pages(path: &Path) -> PdfpResult<Vec<RawPage>> {
         let path_str = path.to_string_lossy();
         let doc = Document::open(path_str.as_ref()).map_err(|e| PdfpError::PdfOpen {
@@ -38,7 +37,6 @@ impl PdfExtractor {
     }
 
     /// Extract document metadata (title, author, subject, page count).
-    #[allow(dead_code)]
     pub fn extract_metadata(path: &Path) -> PdfpResult<DocumentMetadata> {
         let path_str = path.to_string_lossy();
         let doc = Document::open(path_str.as_ref()).map_err(|e| PdfpError::PdfOpen {
@@ -51,29 +49,20 @@ impl PdfExtractor {
             message: e.to_string(),
         })? as usize;
 
-        let title = doc.metadata(MetadataName::Title).ok().and_then(|s| {
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        });
+        let title = doc
+            .metadata(MetadataName::Title)
+            .ok()
+            .filter(|s| !s.is_empty());
 
-        let author = doc.metadata(MetadataName::Author).ok().and_then(|s| {
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        });
+        let author = doc
+            .metadata(MetadataName::Author)
+            .ok()
+            .filter(|s| !s.is_empty());
 
-        let subject = doc.metadata(MetadataName::Subject).ok().and_then(|s| {
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        });
+        let subject = doc
+            .metadata(MetadataName::Subject)
+            .ok()
+            .filter(|s| !s.is_empty());
 
         Ok(DocumentMetadata {
             title,
@@ -85,11 +74,7 @@ impl PdfExtractor {
 
     /// Extract all pages and metadata from a PDF in a single file open.
     pub fn extract(path: &Path) -> PdfpResult<(Vec<RawPage>, DocumentMetadata)> {
-        let path_str = path.to_string_lossy();
-        let doc = Document::open(path_str.as_ref()).map_err(|e| PdfpError::PdfOpen {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        })?;
+        let doc = Self::open_document(path)?;
 
         let page_count = doc.page_count().map_err(|e| PdfpError::PdfExtraction {
             page: 0,
@@ -122,6 +107,20 @@ impl PdfExtractor {
     }
 
     // --- private helpers ---
+
+    /// Open a document, mapping open failures and password-protected files
+    /// to their dedicated error variants.
+    fn open_document(path: &Path) -> PdfpResult<Document> {
+        let path_str = path.to_string_lossy();
+        let doc = Document::open(path_str.as_ref()).map_err(|e| PdfpError::PdfOpen {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })?;
+        if doc.needs_password().unwrap_or(false) {
+            return Err(PdfpError::PasswordProtected(path.to_path_buf()));
+        }
+        Ok(doc)
+    }
 
     fn extract_page(doc: &Document, page_num: usize) -> PdfpResult<RawPage> {
         let page = doc

@@ -46,7 +46,6 @@ pub struct XyCutConfig {
     /// Density ratio threshold (content area / bounding-region area). Currently
     /// computed but not used as a decision driver, kept for future parity with
     /// the paper. Default 0.9.
-    #[allow(dead_code)]
     pub density_threshold: f32,
     /// Minimum horizontal overlap ratio (relative to the smaller box's width)
     /// required to count as one overlap in cross-layout detection. Default 0.1.

@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::cli::{DoctorArgs, OcrOptions};
+use crate::cli::DoctorArgs;
 use crate::ocr;
 
 #[derive(Debug, Serialize)]
@@ -19,7 +19,7 @@ pub fn run(args: &DoctorArgs) -> anyhow::Result<()> {
         pdfp: PdfpStatus {
             version: env!("CARGO_PKG_VERSION"),
         },
-        ocr: ocr::ocr_runtime_status(&OcrOptions::default()),
+        ocr: ocr::ocr_runtime_status(&crate::config::OcrOptions::default()),
     };
 
     if args.json {

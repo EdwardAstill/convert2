@@ -125,7 +125,7 @@ fn dark_bands(pixmap: &Pixmap) -> Vec<DarkBand> {
             break;
         };
         let mut current_run = 0usize;
-        for (x, rgb) in row.chunks_exact(3).enumerate() {
+        for (x, rgb) in row.as_chunks::<3>().0.iter().enumerate() {
             if rgb[0] < DARK_THRESHOLD || rgb[1] < DARK_THRESHOLD || rgb[2] < DARK_THRESHOLD {
                 row_counts[y] += 1;
                 row_min_x[y] = row_min_x[y].min(x);

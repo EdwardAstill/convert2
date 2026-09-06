@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 
 /// Bounding box using corner coordinates (matches mupdf::Rect convention).

@@ -51,22 +51,6 @@ fn make_page(page_num: usize, width: f32, height: f32, blocks: Vec<Block>) -> Pa
     }
 }
 
-fn make_page_override(
-    page_num: usize,
-    width: f32,
-    height: f32,
-    blocks: Vec<Block>,
-    override_md: &str,
-) -> Page {
-    Page {
-        page_num,
-        width,
-        height,
-        blocks,
-        override_markdown: Some(override_md.to_string()),
-    }
-}
-
 #[test]
 fn renders_heading_paragraph() {
     let page = make_page(

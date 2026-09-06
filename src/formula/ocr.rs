@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 /// Result status for a formula OCR sidecar attempt.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[allow(dead_code)]
 pub enum FormulaSidecarStatus {
     NotAttempted,
     Attempted,
@@ -76,7 +75,6 @@ pub struct SubprocessSidecar {
 }
 
 impl SubprocessSidecar {
-    #[allow(dead_code)]
     pub fn new(command: String) -> Self {
         Self::with_timeout(command, Duration::from_secs(30))
     }
